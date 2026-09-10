@@ -23,7 +23,7 @@ jobs:
       - name: 装 Node（前端构建用）
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # wails 依赖 cgo，需要 C 编译器。runner 一般自带 mingw，没带就现装。
       - name: 确保有 C 编译器（cgo 需要）
@@ -34,6 +34,19 @@ jobs:
             choco install mingw -y --no-progress
           }
           gcc --version
+
+      # ⚠️ 必须先构建前端：main.go 有 `//go:embed all:frontend/dist`，
+      # 而 frontend/dist 不入库 —— 少了它连 `go vet` 都会报
+      #   pattern all:frontend/dist: no matching files found
+      - name: 构建前端
+        shell: pwsh
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          if (-not (Test-Path dist\index.html)) { throw "前端没有产出 dist/index.html" }
+          if (-not (Test-Path dist\shim.js))   { throw "shim.js 没有进 dist（它必须由 public/ 复制过去）" }
+          Write-Host "✅ 前端产物就绪"
 
       - name: 静态检查 + 单元测试
         shell: pwsh
@@ -46,14 +59,13 @@ jobs:
         shell: pwsh
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
 
-      # wails build 会按 wails.json 先跑 frontend:install(npm ci) + frontend:build(npm run build)，
-      # 再 go:embed frontend/dist 打进 exe —— 所以这里不需要单独构建前端。
-      # 参数与 build-win.sh 一致（-trimpath -ldflags "-s -w"）。
+      # -s = 跳过前端构建（上面已经构建过了，避免重复 npm ci）。
+      # 其余参数与 build-win.sh 一致：-trimpath -ldflags "-s -w"。
       - name: 构建 Windows 可执行文件
         shell: pwsh
         run: |
           $wails = Join-Path (go env GOPATH) 'bin\wails.exe'
-          & $wails build -platform windows/amd64 -trimpath -ldflags "-s -w"
+          & $wails build -s -platform windows/amd64 -trimpath -ldflags "-s -w"
 
       - name: 校验产物
         shell: pwsh
