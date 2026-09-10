@@ -1,5 +1,22 @@
 # BastionShell（Wails 原生窗口版）
 
+<!-- 第一行动态（数字/版本自己更新）；第二行是平台与技术栈，属固定事实 -->
+[![Build](https://github.com/xingzitian/bastion-shell/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/xingzitian/bastion-shell/actions/workflows/build.yml)
+[![license](https://img.shields.io/github/license/xingzitian/bastion-shell?color=blue)](LICENSE)
+[![last commit](https://img.shields.io/github/last-commit/xingzitian/bastion-shell)](https://github.com/xingzitian/bastion-shell/commits/main)
+[![go version](https://img.shields.io/github/go-mod/go-version/xingzitian/bastion-shell?logo=go&logoColor=white)](go.mod)
+
+[![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20x64-0078D6?logo=windows&logoColor=white)](#运行)
+[![WebView2](https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-WebView2-0078D6)](https://developer.microsoft.com/microsoft-edge/webview2/)
+[![Wails](https://img.shields.io/badge/Wails-v2-DF0000)](https://wails.io/)
+[![React](https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![xterm.js](https://img.shields.io/badge/xterm.js-4B5563)](https://xtermjs.org/)
+[![ZMODEM](https://img.shields.io/badge/%E4%BC%A0%E8%BE%93-ZMODEM%20%2F%20trzsz-4B5563)](#前端)
+
+> 仓库：<https://github.com/xingzitian/bastion-shell> ·
+> 问题反馈：<https://github.com/xingzitian/bastion-shell/issues> ·
+> 第三方组件与许可：见 [THIRD-PARTY.md](THIRD-PARTY.md)
+
 BastionShell 的 Wails 壳：Go 后端 + 内嵌 React 前端，打包成 Windows 原生窗口程序（WebView2），不再是 Edge `--app` 浏览器页。
 
 ## 架构
