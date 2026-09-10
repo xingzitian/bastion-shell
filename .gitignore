@@ -10,6 +10,9 @@ build/bin/
 .electron-cache/
 npm-debug.log*
 *.log
+# wails build 会在跑 frontend:install 后写下这个文件（记录 package.json 的哈希，
+# 用来判断下次要不要重装依赖）——纯机器状态，不该进仓库。
+frontend/package.json.md5
 
 # ---- 编辑器与系统 ----
 .DS_Store
