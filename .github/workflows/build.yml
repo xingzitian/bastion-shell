@@ -1,0 +1,71 @@
+name: Build
+
+# 云编译：在 GitHub 的 Windows runner 上出包，本地不用装 WSL/Go/Node 也能拿到最新 exe。
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 Go（版本跟着 go.mod 走）
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 装 Node（前端构建用）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # wails 依赖 cgo，需要 C 编译器。runner 一般自带 mingw，没带就现装。
+      - name: 确保有 C 编译器（cgo 需要）
+        shell: pwsh
+        run: |
+          if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) {
+            Write-Host "runner 上没有 gcc，用 choco 装 mingw"
+            choco install mingw -y --no-progress
+          }
+          gcc --version
+
+      - name: 静态检查 + 单元测试
+        shell: pwsh
+        run: |
+          go vet ./...
+          go test ./...
+
+      # 版本与本地 build-win.sh 用的保持一致（v2.15.0），避免两边产物不一样
+      - name: 安装 wails CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+
+      # wails build 会按 wails.json 先跑 frontend:install(npm ci) + frontend:build(npm run build)，
+      # 再 go:embed frontend/dist 打进 exe —— 所以这里不需要单独构建前端。
+      # 参数与 build-win.sh 一致（-trimpath -ldflags "-s -w"）。
+      - name: 构建 Windows 可执行文件
+        shell: pwsh
+        run: |
+          $wails = Join-Path (go env GOPATH) 'bin\wails.exe'
+          & $wails build -platform windows/amd64 -trimpath -ldflags "-s -w"
+
+      - name: 校验产物
+        shell: pwsh
+        run: |
+          $exe = Get-Item build\bin\BastionShell.exe
+          $exe | Format-List Name, Length, LastWriteTime
+          if ($exe.Length -lt 5MB) { throw "产物只有 $([math]::Round($exe.Length/1MB,1)) MB，构建可疑" }
+          Write-Host "✅ 产物正常：$([math]::Round($exe.Length/1MB,1)) MB"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: BastionShell-windows-amd64
+          path: build/bin/BastionShell.exe
+          if-no-files-found: error
