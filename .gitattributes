@@ -1,0 +1,8 @@
+# shell 脚本必须是 LF 换行。
+# Windows 上如果被编辑器/工具改成 CRLF，在 WSL 里跑会直接报
+#   bash: build-win.sh: line N: $'\r': command not found
+# 这种错很难一眼看出原因，所以在这里锁住。
+*.sh text eol=lf
+
+# 其余按 git 的自动判断处理（二进制不动）
+* text=auto

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      CSP 里的 connect-src 是本项目相对 Electron 版**唯一必要的改动**：
+      界面通过 ws://127.0.0.1:18090 与 http://127.0.0.1:18090 跟 Go 后端说话，
+      不放开 connect-src 的话 WebSocket 会被 CSP 直接拦掉（界面能开、连不上机器）。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss: http: https:"
+    />
+    <title>BastionShell</title>
+    <!-- 适配层：把 window.bastion 翻译到 Go 后端。必须在应用 bundle 之前加载 -->
+    <script src="/shim.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

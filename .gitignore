@@ -1,0 +1,31 @@
+# ---- Wails / Go 构建产物 ----
+build/bin/
+*.syso
+/bastion-wails
+/bastion-wails.exe
+/bastion-serve
+
+# ---- 缓存与临时 ----
+.npm-cache/
+.electron-cache/
+npm-debug.log*
+*.log
+
+# ---- 编辑器与系统 ----
+.DS_Store
+Thumbs.db
+
+# ---- 前端 ----
+# 依赖目录不提交：
+node_modules/
+# 构建产物：源码已在 frontend/src（React + TS），由 `npm run build` 生成。
+# `wails build` 会先跑 frontend:install / frontend:build（见 wails.json）再 go:embed，
+# 所以 dist 不必入库 —— 但注意：**单独跑 `go build` 会因为 dist 不存在而失败**，
+# 要编译就用 `wails build`（也就是 build-win.sh）。
+frontend/dist/
+
+# ---- 下面这些目录**必须提交**，不要加进忽略列表 ----
+# assets/                  rz.exe / sz.exe / msys-2.0.dll，运行时需要（go:embed assets/*）
+# third_party/trzsz-go/    go.mod 里有 replace 指向它，构建必需
+# frontend/public/shim.js  window.bastion 适配层，会被 vite 复制进 dist（必须提交）
+# frontend/wailsjs/        wails 生成的绑定

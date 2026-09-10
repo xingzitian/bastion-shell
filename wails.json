@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "BastionShell",
+  "outputfilename": "BastionShell",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "Info": {
+    "companyName": "BastionShell",
+    "productName": "BastionShell Go",
+    "productVersion": "0.9.0",
+    "copyright": "",
+    "comments": "BastionShell Go 轻量堡垒机 SSH 终端"
+  },
+  "author": {
+    "name": "BastionShell",
+    "email": ""
+  }
+}
