@@ -109,3 +109,14 @@ frontend/dist  React 构建（index.html + shim.js + assets/）
 build/         图标 + Windows 资源 + 产物
 build-win.sh   一键交叉编译脚本
 ```
+
+## 🚧 未完成：rsync 增量同步（`tools/rsync-probe/`）
+
+前端的 `SyncDialog` 还在，但 **Go 侧从来没有实现过**（`window.bastion.syncDirectory` 在后端不存在）——
+也就是说这个功能在桌面版里**是空的**，别被界面骗了。
+
+它的调查工具和实测记录都在 [`tools/rsync-probe/`](tools/rsync-probe/)（含 `RESULTS.md`，四轮实测的原始输出，
+以及被实测**推翻**的两条旧结论）。真正跑通的实现目前只在 VS Code 扩展那侧
+（[`bastion-vscode`](https://github.com/xingzitian/bastion-vscode)，同样标记为实验性、默认关闭）：
+本地测试台全绿，但在**某类堡垒机**上大文件传到 ~95% 会停住，原因暂时定不到应用层。
+**欢迎高手接手**——探针、测试台、失败现象的字节级日志都在仓库里。
