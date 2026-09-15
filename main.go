@@ -39,6 +39,13 @@ func main() {
 			log.Printf("后端服务异常: %v", err)
 		}
 	}()
+	// 启动 MCP 出口：让外部的 AI 客户端能在**用户已经手动登录好的会话**上执行命令。
+	// 独立端口（默认 39311）+ Bearer token，细节见 mcp_register.go。
+	go func() {
+		if err := startMcpServer(); err != nil {
+			log.Printf("MCP 端点未能启动: %v（AI 功能不可用，其它功能不受影响）", err)
+		}
+	}()
 
 	app := NewApp()
 	err := wails.Run(&options.App{

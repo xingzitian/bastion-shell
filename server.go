@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
-	"github.com/trzsz/trzsz-go/trzsz"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -26,19 +24,19 @@ func defaultDownloadDir() string {
 }
 
 type wsMsg struct {
-	Type     string `json:"type"`
-	ConnID   string `json:"connId,omitempty"`
-	Host     string `json:"host,omitempty"`
-	Port     int    `json:"port,omitempty"`
-	User     string `json:"user,omitempty"`
-	Password string `json:"password,omitempty"`
-	Key      string `json:"key,omitempty"`
+	Type       string `json:"type"`
+	ConnID     string `json:"connId,omitempty"`
+	Host       string `json:"host,omitempty"`
+	Port       int    `json:"port,omitempty"`
+	User       string `json:"user,omitempty"`
+	Password   string `json:"password,omitempty"`
+	Key        string `json:"key,omitempty"`
 	Passphrase string `json:"passphrase,omitempty"`
-	MFA      string `json:"mfa,omitempty"`
-	Cols     int    `json:"cols,omitempty"`
-	Rows     int    `json:"rows,omitempty"`
-	Data     string `json:"data,omitempty"`
-	Message  string `json:"message,omitempty"`
+	MFA        string `json:"mfa,omitempty"`
+	Cols       int    `json:"cols,omitempty"`
+	Rows       int    `json:"rows,omitempty"`
+	Data       string `json:"data,omitempty"`
+	Message    string `json:"message,omitempty"`
 	// 端口转发用
 	ID         string `json:"id,omitempty"`
 	LocalHost  string `json:"localHost,omitempty"`
@@ -54,6 +52,8 @@ type wsMsg struct {
 	Prompt       string `json:"prompt,omitempty"`
 	Echo         bool   `json:"echo,omitempty"`
 	Value        string `json:"value,omitempty"`
+	// 会话 id（前端可选传；不传就由后端生成，会话登记表用它当主键）
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 var upgrader = websocket.Upgrader{
@@ -88,6 +88,9 @@ func acquireConn(connID string, m wsMsg) (*ssh.Client, error) {
 	}
 	if connID != "" {
 		connPool.m[connID] = &connEntry{client: client, refs: 1}
+		// 记下这条连接是谁连的哪里：会话 WS 的 connect 消息里只有 connId，
+		// 而会话登记表要用 用户@主机 给会话起名字（否则 AI 只能看到一串 id）。
+		rememberConn(connID, connMeta{Host: m.Host, Port: m.Port, User: m.User})
 		log.Printf("[conn %s] 新建连接", connID)
 	}
 	return client, nil
@@ -115,6 +118,7 @@ func releaseConn(connID string) {
 	if shouldClose {
 		_ = client.Close()
 		stopForwardsOfConn(connID)
+		forgetConn(connID)
 		log.Printf("[conn %s] 连接已关闭（会话全部结束）", connID)
 	}
 }
@@ -130,6 +134,7 @@ func serveBackend(port int) error {
 	registerUploadRoutes(mux)
 	registerDeployRoutes(mux)
 	registerSecretRoutes(mux, newSecretStore())
+	registerMcpInfoRoute(mux)
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	log.Printf("后端服务已启动: http://%s", addr)
 	return http.ListenAndServe(addr, corsMiddleware(mux))
@@ -231,6 +236,8 @@ func controlChannel(conn *websocket.Conn, first wsMsg, write func(wsMsg)) {
 			connPool.Lock()
 			connPool.m[first.ConnID] = &connEntry{client: r.client, refs: 1}
 			connPool.Unlock()
+			// 交互式建连这条路径也要记元信息（会话登记表靠它给会话起名字）
+			rememberConn(first.ConnID, connMeta{Host: first.Host, Port: first.Port, User: first.User})
 			defer releaseConn(first.ConnID)
 			write(wsMsg{Type: "ready", ConnID: first.ConnID})
 			for {
@@ -288,81 +295,35 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseConn(first.ConnID)
 
-	rows, cols := first.Rows, first.Cols
-	if rows <= 0 {
-		rows = 24
-	}
-	if cols <= 0 {
-		cols = 80
-	}
-
-	sess, err := client.NewSession()
-	if err != nil {
-		write(wsMsg{Type: "error", Message: err.Error()})
-		return
-	}
-	defer sess.Close()
-	if err := sess.RequestPty("xterm-256color", rows, cols, ssh.TerminalModes{ssh.ECHO: 1}); err != nil {
-		write(wsMsg{Type: "error", Message: err.Error()})
-		return
-	}
-	stdin, err := sess.StdinPipe()
-	if err != nil {
-		write(wsMsg{Type: "error", Message: err.Error()})
-		return
-	}
-	stdout, err := sess.StdoutPipe()
-	if err != nil {
-		write(wsMsg{Type: "error", Message: err.Error()})
-		return
-	}
-
-	// trzsz 过滤器：包在客户端(WS)与服务端(SSH)之间，自动处理 rz/sz 文件传输
-	clientIn, stdinPipe := io.Pipe()   // 终端输入：WS → stdinPipe → clientIn → 过滤器 → stdin
-	stdoutPipe, clientOut := io.Pipe() // 终端输出：stdout → 过滤器 → clientOut → stdoutPipe → WS
-	dragCmd := "trz -y"
-	if useZmodem {
-		dragCmd = "rz -y"
-	}
-	tf := trzsz.NewTrzszFilter(clientIn, clientOut, stdin, stdout, trzsz.TrzszOptions{
-		TerminalColumns: int32(cols),
-		EnableZmodem:    useZmodem, // Windows 上用内嵌 lrzsz 走 zmodem（服务器只需 rz/sz）；Linux 自测用原生 trzsz
+	// 会话本体（pty + shell + trzsz 过滤器 + 输出登记）统一在 newBastionSession 里建：
+	// 它同时被 handleWS 和 Go 测试用到，避免「测试跑的路径」和「真机跑的路径」是两份实现。
+	var uploadPending atomic.Bool
+	sess, err := newBastionSession(sessionOpts{
+		ID:     first.SessionID,
+		ConnID: first.ConnID,
+		Client: client,
+		Cols:   first.Cols,
+		Rows:   first.Rows,
+		Out: func(b []byte) {
+			write(wsMsg{Type: "data", Data: string(b)})
+		},
 	})
-	tf.SetDragFileUploadCommand(dragCmd) // 上传：trz -y（原生）或 rz -y（zmodem），覆盖已存在
-	downloadDir := defaultDownloadDir()
-	_ = os.MkdirAll(downloadDir, 0o755)
-	tf.SetDefaultDownloadPath(downloadDir)
-	defer tf.Close()
+	if err != nil {
+		write(wsMsg{Type: "error", Message: err.Error()})
+		return
+	}
+	defer sess.close()
 
 	// 传输完成信号：只在真正传输结束（transferring=false）时才发 upload:done，
 	// 避免 UploadFiles 一入队就误报"完成"。
-	var uploadPending atomic.Bool
-	tf.SetTransferStateCallback(func(transferring bool) {
+	sess.addTransferListener(func(transferring bool) {
 		if !transferring && uploadPending.Load() {
 			uploadPending.Store(false)
 			write(wsMsg{Type: "upload:done"})
 		}
 	})
 
-	if err := sess.Shell(); err != nil {
-		write(wsMsg{Type: "error", Message: err.Error()})
-		return
-	}
 	write(wsMsg{Type: "ready", ConnID: first.ConnID})
-
-	// 终端输出：stdoutPipe → ws
-	go func() {
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := stdoutPipe.Read(buf)
-			if n > 0 {
-				write(wsMsg{Type: "data", Data: string(buf[:n])})
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
 
 	// ws → stdin / resize / forward / upload
 	for {
@@ -372,21 +333,18 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		switch m.Type {
 		case "input":
-			_, _ = stdinPipe.Write([]byte(m.Data))
+			_ = sess.writeRaw([]byte(m.Data))
 		case "upload":
 			uploadPending.Store(true)
 			go func(paths []string) {
-				if err := tf.UploadFiles(paths); err != nil {
+				if err := sess.uploadFiles(paths); err != nil {
 					uploadPending.Store(false)
 					write(wsMsg{Type: "upload:error", Message: err.Error()})
 				}
 				// 成功时不再立即发 upload:done；等 transfer state callback(false) 时发
 			}(m.Paths)
 		case "resize":
-			if m.Cols > 0 && m.Rows > 0 {
-				_ = sess.WindowChange(m.Rows, m.Cols)
-				tf.SetTerminalColumns(int32(m.Cols))
-			}
+			sess.resize(m.Cols, m.Rows)
 		case "forward:start", "forward:stop":
 			handleForwardMsg(m, first.ConnID, client, write)
 		}
