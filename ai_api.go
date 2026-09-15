@@ -90,7 +90,7 @@ func (desktopSessionAPI) ListProfiles() (string, error) {
 		if port == 0 {
 			port = 22
 		}
-		rows = append(rows, fmt.Sprintf("- %s（%s@%s:%d）", p.Name, p.User, p.Host, port))
+		rows = append(rows, fmt.Sprintf("- %s（%s@%s:%d）", p.Name, p.Username, p.Host, port))
 	}
 	return fmt.Sprintf("可用的连接档案（%d 个）：\n%s\n\n注意：档案里是**堡垒机**（或直连主机）的地址。"+
 		"桌面版的档案没有「直连/堡垒机」标记，也没有记录提权习惯；"+
@@ -277,7 +277,7 @@ func profileNameForSession(s *bastionSession) string {
 		if p.Host != s.host {
 			continue
 		}
-		if p.User != "" && s.user != "" && p.User != s.user {
+		if p.Username != "" && s.user != "" && p.Username != s.user {
 			continue
 		}
 		return p.Name

@@ -250,39 +250,86 @@
   // ---- 数据存储（localStorage）----
 
   // 档案
+  //
+  // ⚠️ **档案存的是共享文件**（~/.bastionshell/profiles.jsonc，Go 侧读写），
+  // 桌面版和 VS Code 扩展看的是同一份 —— 在任一边加机器，另一边都会看到。
+  // 这里不再用 localStorage 存档案（旧版存过，下面有一次性迁移）。
+  // 密码**不进共享文件**：走本机 DPAPI（/api/secret），键 = 档案名。
   function listProfiles() {
-    var profs = lsGet('profiles', []);
-    var passwords = lsGet('passwords', {});
-    return Promise.resolve(profs.map(function (p) {
-      return Object.assign({}, p, { hasStoredPassword: !!passwords[p.id] });
-    }));
+    return fetch(API_BASE + '/api/profiles')
+      .then(function (r) { return r.json(); })
+      .then(function (list) {
+        return migrateLegacyProfiles(list || []).then(function (profs) {
+          var flags = lsGet('passwords', {});
+          return profs.map(function (p) {
+            return Object.assign({}, p, { hasStoredPassword: !!flags[p.id] });
+          });
+        });
+      })
+      .catch(function () { return []; });
   }
   function saveProfile(profile) {
-    var profs = lsGet('profiles', []);
-    var i = profs.findIndex(function (p) { return p.id === profile.id; });
-    if (i >= 0) profs[i] = profile; else profs.push(profile);
-    lsSet('profiles', profs);
-    return Promise.resolve(profile);
+    var body = Object.assign({}, profile, { id: profile.id || profile.name });
+    return fetch(API_BASE + '/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (!r.ok) throw new Error('保存档案失败（HTTP ' + r.status + '）');
+      return body;
+    });
   }
   function deleteProfile(id) {
-    lsSet('profiles', lsGet('profiles', []).filter(function (p) { return p.id !== id; }));
-    var passwords = lsGet('passwords', {}); delete passwords[id]; lsSet('passwords', passwords);
-    deletePassword(id);
-    return Promise.resolve();
+    return fetch(API_BASE + '/api/profiles?name=' + encodeURIComponent(id), { method: 'DELETE' })
+      .catch(function () {})
+      .then(function () {
+        var flags = lsGet('passwords', {}); delete flags[id]; lsSet('passwords', flags);
+        return deletePassword(id);
+      });
+  }
+
+  // 一次性迁移：旧版把档案存在 localStorage（id 是随机串），密码在 DPAPI 里按那个随机串存。
+  // 现在档案的真源是共享文件、身份用**档案名**，所以要把 DPAPI 里那份密码改挂到名字上，
+  // 否则用户升级后会发现"存过的密码没了"（得重输一次）。搬完就把旧的 localStorage 清单删掉。
+  function migrateLegacyProfiles(shared) {
+    var legacy = lsGet('profiles', []);
+    if (!legacy || !legacy.length) return Promise.resolve(shared);
+    var flags = lsGet('passwords', {});
+    var jobs = legacy.map(function (old) {
+      if (!old || !old.name || !old.id) return Promise.resolve();
+      if (!flags[old.id]) return Promise.resolve();
+      return getPassword(old.id).then(function (pw) {
+        if (!pw) return;
+        return setPassword(old.name, pw).then(function () { return deletePassword(old.id); });
+      });
+    });
+    return Promise.all(jobs).then(function () {
+      lsSet('profiles', []);
+      return shared;
+    });
   }
 
   // 快捷命令
-  function listQuickCommands() { return Promise.resolve(lsGet('quickcommands', [])); }
+  // 快捷命令：同样存共享文件（~/.bastionshell/quickCommands.jsonc），旧的 localStorage 不再使用
+  function listQuickCommands() {
+    return fetch(API_BASE + '/api/quick-commands')
+      .then(function (r) { return r.json(); })
+      .catch(function () { return []; });
+  }
   function saveQuickCommand(cmd) {
-    var list = lsGet('quickcommands', []);
-    var i = list.findIndex(function (x) { return x.id === cmd.id; });
-    if (i >= 0) list[i] = cmd; else list.push(cmd);
-    lsSet('quickcommands', list);
-    return Promise.resolve(cmd);
+    return fetch(API_BASE + '/api/quick-commands', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cmd)
+    }).then(function (r) {
+      if (!r.ok) throw new Error('保存快捷命令失败（HTTP ' + r.status + '）');
+      return cmd;
+    });
   }
   function deleteQuickCommand(id) {
-    lsSet('quickcommands', lsGet('quickcommands', []).filter(function (x) { return x.id !== id; }));
-    return Promise.resolve();
+    return fetch(API_BASE + '/api/quick-commands?id=' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function () { return undefined; })
+      .catch(function () { return undefined; });
   }
 
   // 高亮规则（默认与 Electron 版一致）
@@ -326,20 +373,32 @@
   function importTheme() { return Promise.resolve(null); }
 
   // 转发规则
+  //
+  // ⚠️ **规则存在共享文件里**（~/.bastionshell/forwardRules.jsonc，Go 侧读写）：
+  // 桌面版和 VS Code 扩展看的是同一份。这里不再用 localStorage（旧版存过 'fwrules'）。
   function listForwardRules(profileId) {
-    return Promise.resolve(lsGet('fwrules', []).filter(function (r) { return r.profileId === profileId; }));
+    return fetch(API_BASE + '/api/forwards')
+      .then(function (r) { return r.json(); })
+      .then(function (list) {
+        return (list || []).filter(function (r) { return !profileId || r.profileId === profileId; });
+      })
+      .catch(function () { return []; });
   }
   function saveForwardRule(profileId, rule) {
-    rule.profileId = profileId;
-    var list = lsGet('fwrules', []);
-    var i = list.findIndex(function (x) { return x.id === rule.id; });
-    if (i >= 0) list[i] = rule; else list.push(rule);
-    lsSet('fwrules', list);
-    return Promise.resolve(rule);
+    var body = Object.assign({}, rule, { profileId: profileId });
+    return fetch(API_BASE + '/api/forwards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (!r.ok) throw new Error('保存转发规则失败（HTTP ' + r.status + '）');
+      return body;
+    });
   }
   function deleteForwardRule(ruleId) {
-    lsSet('fwrules', lsGet('fwrules', []).filter(function (x) { return x.id !== ruleId; }));
-    return Promise.resolve();
+    return fetch(API_BASE + '/api/forwards?id=' + encodeURIComponent(ruleId), { method: 'DELETE' })
+      .then(function () { return undefined; })
+      .catch(function () { return undefined; });
   }
   function startForward(connectionId, rule) {
     var ws = controlWS[connectionId];

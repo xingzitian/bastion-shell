@@ -132,6 +132,7 @@ func serveBackend(port int) error {
 	registerProfileRoutes(mux, newProfileStore())
 	registerForwardRoutes(mux, newForwardStore())
 	registerUploadRoutes(mux)
+	registerQuickCommandRoutes(mux)
 	registerDeployRoutes(mux)
 	registerSecretRoutes(mux, newSecretStore())
 	registerMcpInfoRoute(mux)

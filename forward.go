@@ -9,13 +9,19 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// forwardRule 本地端口转发规则（对齐 Electron 版的 PortForwardRule）
+// forwardRule 本地端口转发规则（字段名与 VS Code 扩展侧一致：共享文件只有一套词汇）
 type forwardRule struct {
 	ID         string `json:"id"`
 	LocalHost  string `json:"localHost"`
 	LocalPort  int    `json:"localPort"`
 	RemoteHost string `json:"remoteHost"`
 	RemotePort int    `json:"remotePort"`
+	// ProfileID 所属档案名（扩展侧一直有它，界面按它分组）。
+	// ⚠️ 桌面版原来没有这个字段：改成共享文件后必须带上 —— 前端发上来的 profileId
+	// 一旦被丢弃，`listForwardRules(profileId)` 按它过滤就什么都查不到。
+	ProfileID string `json:"profileId,omitempty"`
+	// Label 给人看的名字
+	Label string `json:"label,omitempty"`
 }
 
 type forwardEntry struct {
