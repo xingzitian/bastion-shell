@@ -233,6 +233,13 @@ func (s *bastionSession) exec(command string, opts execOpts) (execResult, error)
 	}
 
 	if opts.Job != nil {
+		// 作业自己持有哨兵与静默窗口：exec 超时返回后它仍然能判完成（P0-1 的修法）
+		opts.Job.mu.Lock()
+		if safe {
+			opts.Job.marker = marker
+		}
+		opts.Job.quietMs = int64(quietMs)
+		opts.Job.mu.Unlock()
 		s.activeJob = opts.Job
 	}
 	mark := s.tail.mark()
@@ -283,18 +290,20 @@ func (s *bastionSession) exec(command string, opts execOpts) (execResult, error)
 	}
 	elapsed := time.Since(started).Milliseconds()
 	if opts.Job != nil {
-		if timedOut {
-			// 超时不是失败：命令还在跑，作业继续收输出（AI 用 bastion_job / bastion_wait 跟进）
-			log.Printf("[作业 %s] %d ms 还没结束，转后台继续捕获", opts.Job.id, elapsed)
-		} else {
-			var code int
+		if seen {
+			// 确定完成：看到哨兵，退出码可信
+			code := 0
 			if rc != nil {
 				code = *rc
 			}
-			opts.Job.complete(code, rc != nil, !safe || seen)
+			opts.Job.complete(code, true, true)
 			if s.activeJob == opts.Job {
 				s.activeJob = nil
 			}
+		} else {
+			// 没看到哨兵（超时 / 静默 / 交互）→ **不替作业下结论**：
+			// appendOutput 会继续扫标记，看门狗按"提示符已回 + 静默"兜底
+			log.Printf("[作业 %s] exec 先返回（%d ms），作业继续捕获", opts.Job.id, elapsed)
 		}
 	}
 	return execResult{

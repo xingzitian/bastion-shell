@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -503,6 +504,13 @@ func (s *bastionSession) finish() {
 
 func (s *bastionSession) close() {
 	s.closeOnce.Do(func() {
+		// 会话关闭 = 它上面还在跑的作业一律终结（否则永远 working，把会话"锁死"）
+		if j := s.activeJob; j != nil {
+			j.fail("session_lost")
+			s.activeJob = nil
+		}
+		// 记下"刚关闭的会话"：AI 再指认它时能说清是"已关闭"而不是"参数写错"
+		rememberClosedSID(s.sid)
 		s.finish()
 		if s.tf != nil {
 			s.tf.Close()
@@ -629,6 +637,11 @@ func lookupSession(want, mode string) (*bastionSession, string) {
 		}
 	}
 	ref, msg := resolveSessionRef(refs, want, mode, "default", doc, fallback, false)
+	// 「刚关闭的会话」和「参数指认不到」必须分开：下一步动作完全不同
+	if msg != "" && regexp.MustCompile(`^s-[0-9a-z]{2,}$`).MatchString(strings.ToLower(strings.TrimSpace(want))) &&
+		isRecentlyClosedSID(strings.TrimSpace(want)) {
+		msg = fmt.Sprintf("会话 %s **已经关闭了**（刚才还活着，绑定已被清理）。要接着干：让用户重新连一台，或 bastion_listSessions 看现在有哪些会话。", strings.TrimSpace(want))
+	}
 	if msg != "" {
 		log.Printf("会话解析被拒绝（%s）：%s", mode, msg)
 		return nil, msg

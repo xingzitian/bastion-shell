@@ -275,6 +275,7 @@ func (desktopSessionAPI) Exec(args execArgs) (string, error) {
 		waitMs = 1
 	}
 
+	startJobWatcher()
 	job := createJob(s.id, s.cursor.Load(), cmd)
 	res, err := s.exec(cmd, execOpts{
 		AllowPlainSudo: privilege == privSudo,

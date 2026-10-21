@@ -182,3 +182,65 @@ func TestDetectInputPrompt(t *testing.T) {
 		t.Fatal("普通输出不该被识别成提示")
 	}
 }
+
+// ── 作业自持完成（压测 P0-1 的桌面版回归）──
+
+func TestExecJobMarkerScanCompletes(t *testing.T) {
+	j := createJob("s-marker", 0, "make")
+	j.mu.Lock()
+	j.marker = "__BASTION_DONE_z__"
+	j.mu.Unlock()
+	j.appendOutput([]byte("building...\n"))
+	if v := j.view(0); v.Status != statusWorking {
+		t.Fatalf("还在跑：%s", v.Status)
+	}
+	j.appendOutput([]byte("__BASTION_DONE_z__:0\n"))
+	v := j.view(0)
+	if v.Status != statusCompleted || v.ExitCode != 0 || !v.MarkerSeen {
+		t.Fatalf("★ 看到哨兵必须自己完成（退出码 0 不能被当成「没命中」）：%+v", v)
+	}
+	if activeJobOf("s-marker") != nil {
+		t.Fatal("完成后必须让出会话")
+	}
+}
+
+func TestExecJobMarkerSplitAcrossChunks(t *testing.T) {
+	j := createJob("s-split2", 0, "x")
+	j.mu.Lock()
+	j.marker = "__DONE_Y__"
+	j.mu.Unlock()
+	j.appendOutput([]byte("out __DONE_Y"))
+	j.appendOutput([]byte("__:7\n"))
+	v := j.view(0)
+	if v.Status != statusFailed || v.ExitCode != 7 {
+		t.Fatalf("切块也要识别，且非 0 记 failed：%+v", v)
+	}
+}
+
+func TestExecJobQuietDoesNotCompleteByItself(t *testing.T) {
+	j := createJob("s-quiet2", 0, "sleep 45")
+	j.mu.Lock()
+	j.quietMs = 10
+	j.lastOutputAt = time.Now().Add(-time.Second)
+	j.mu.Unlock()
+	if !j.quietExpired(time.Now()) {
+		t.Fatal("应该判定为静默到期")
+	}
+	if v := j.view(0); v.Status != statusWorking {
+		t.Fatalf("静默本身不能完成作业（sleep 45 不能被误判）：%s", v.Status)
+	}
+	j.completeQuiet()
+	if v := j.view(0); v.Status != statusCompleted || v.MarkerSeen {
+		t.Fatalf("兜底完成应标记 markerSeen=false：%+v", v)
+	}
+}
+
+func TestClosedSIDTracking(t *testing.T) {
+	rememberClosedSID("s-c1")
+	if !isRecentlyClosedSID("s-c1") {
+		t.Fatal("刚关闭的会话应能查到")
+	}
+	if isRecentlyClosedSID("s-nope") {
+		t.Fatal("没关过的不该查到")
+	}
+}

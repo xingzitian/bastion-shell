@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -47,6 +48,11 @@ type execJob struct {
 	prompt     string
 	hint       string
 	reason     string
+	// marker / quietMs / lastOutputAt：**作业自己**判完成（exec 超时返回后仍然有效）
+	marker       string
+	quietMs      int64
+	lastOutputAt time.Time
+	scanTail     string
 
 	mu      sync.Mutex
 	waiters []chan struct{}
@@ -84,12 +90,14 @@ func newJobID() string {
 
 func createJob(sessionID string, cursorAtStart int64, command string) *execJob {
 	j := &execJob{
-		id:         newJobID(),
-		sessionID:  sessionID,
-		command:    command,
-		startedAt:  time.Now(),
-		state:      statusWorking,
-		cmdAtStart: cursorAtStart,
+		id:           newJobID(),
+		sessionID:    sessionID,
+		command:      command,
+		startedAt:    time.Now(),
+		state:        statusWorking,
+		cmdAtStart:   cursorAtStart,
+		quietMs:      15000,
+		lastOutputAt: time.Now(),
 	}
 	jobsMu.Lock()
 	jobs[j.id] = j
@@ -145,7 +153,51 @@ func (j *execJob) appendOutput(b []byte) {
 		j.lastLine = line
 	}
 	j.mu.Unlock()
+	// ★ 完成判定归作业自己：exec 超时返回后，标记仍然能被这里解析出来
+	if rc, ok := j.scanMarker(string(b)); ok {
+		j.complete(rc, true, true)
+		return
+	}
 	j.wake()
+}
+
+// scanMarker 在"上一块的尾巴 + 这一块"里找哨兵，返回退出码。
+// 拼尾巴是因为标记可能被切在两次数据块之间；回显里是字面量 "$ec"，正则要求 :<数字> 才算。
+func (j *execJob) scanMarker(chunk string) (int, bool) {
+	j.mu.Lock()
+	marker := j.marker
+	hay := j.scanTail + chunk
+	if marker != "" {
+		j.scanTail = tailBytes(hay, len(marker)+64)
+	}
+	j.mu.Unlock()
+	if marker == "" {
+		return 0, false
+	}
+	re := regexp.MustCompile(regexp.QuoteMeta(marker) + `:(\d+)`)
+	m := re.FindStringSubmatch(hay)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func tailBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
+// quietExpired 输出已经静止够久了吗（静默只是"可以兜底"，还要调用方确认提示符已回）
+func (j *execJob) quietExpired(now time.Time) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.state == statusWorking && now.Sub(j.lastOutputAt) >= time.Duration(j.quietMs)*time.Millisecond
 }
 
 func lastNonEmptyLine(s string) string {
@@ -391,4 +443,86 @@ func sessionByID(id string) *bastionSession {
 		}
 	}
 	return nil
+}
+
+// ── 最近关闭的会话（带 TTL）──
+
+var closedSIDs = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
+func rememberClosedSID(sid string) {
+	if sid == "" {
+		return
+	}
+	closedSIDs.Lock()
+	defer closedSIDs.Unlock()
+	closedSIDs.m[sid] = time.Now()
+}
+
+func isRecentlyClosedSID(sid string) bool {
+	if sid == "" {
+		return false
+	}
+	closedSIDs.Lock()
+	defer closedSIDs.Unlock()
+	for k, at := range closedSIDs.m {
+		if time.Since(at) > 10*time.Minute {
+			delete(closedSIDs.m, k)
+		}
+	}
+	_, ok := closedSIDs.m[sid]
+	return ok
+}
+
+// startJobWatcher 作业看门狗（每秒一次）。
+//
+// 静默**不能单独**作为完成依据：`sleep 45` 也是静默 —— 必须"静默 + 提示符已经回来了"才算跑完；
+// 屏幕回到堡垒机菜单则是 `exit` 之类把 shell 退了，记 session_exited。
+func startJobWatcher() {
+	watcherOnce.Do(func() {
+		go func() {
+			for {
+				time.Sleep(time.Second)
+				for _, j := range snapshotJobs() {
+					if j.terminalState() {
+						continue
+					}
+					s := sessionByID(j.sessionID)
+					if s == nil {
+						j.fail("session_lost")
+						continue
+					}
+					if !j.quietExpired(time.Now()) {
+						continue
+					}
+					switch s.screenState() {
+					case stateMenu:
+						j.fail("session_exited")
+					case stateShell:
+						j.completeQuiet()
+					}
+				}
+			}
+		}()
+	})
+}
+
+var watcherOnce sync.Once
+
+// snapshotJobs 当前所有作业（看门狗遍历用；避免长时间持锁）
+func snapshotJobs() []*execJob {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	out := make([]*execJob, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, j)
+	}
+	return out
+}
+
+// completeQuiet 静默兜底完成（没看到哨兵，但提示符已回）
+func (j *execJob) completeQuiet() {
+	j.complete(0, false, false)
 }
