@@ -185,11 +185,12 @@ func buildAiAccessView() aiAccessView {
 			Label:      label,
 			Scope:      "unknown",
 			ScopeLabel: "（权限在扩展侧）",
-			Plain:      "这个客户端的权限档由 VS Code 扩展管理，桌面版只显示它的绑定",
-			Can:        nil,
-			Cannot:     nil,
-			External:   true,
-			Bindings:   []aiBindingView{},
+			Plain: "这个客户端不是桌面版签发的：它可能用的是**主令牌（全权）**，也可能是扩展侧签发的受限令牌。" +
+				"权限以扩展侧的「AI 访问」为准；桌面版这里只显示它的绑定。",
+			Can:      nil,
+			Cannot:   nil,
+			External: true,
+			Bindings: []aiBindingView{},
 		}
 		for _, a := range sortedAliases(cb.Sessions) {
 			b := cb.Sessions[a]
