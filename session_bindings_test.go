@@ -6,6 +6,7 @@ package main
 // 绝不回退到"最近活动的那条"。
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -169,4 +170,31 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})())
+}
+
+func TestAliasNameAndCap32(t *testing.T) {
+	want := map[int]string{0: "A", 7: "H", 25: "Z", 26: "AA", 27: "AB", 31: "AF"}
+	for i, name := range want {
+		if got := aliasName(i); got != name {
+			t.Fatalf("aliasName(%d) = %q，应为 %q", i, got, name)
+		}
+	}
+	doc := emptyDoc()
+	var seen []string
+	for i := 0; i < 32; i++ {
+		a, _, msg := bindSession(doc, "default", sessionRef{SID: fmt.Sprintf("s-%d", i), Name: fmt.Sprintf("#%d h", i)}, "")
+		if msg != "" {
+			t.Fatalf("第 %d 条应该绑定成功：%s", i+1, msg)
+		}
+		seen = append(seen, a)
+	}
+	if seen[8] != "I" {
+		t.Fatalf("第 9 条应该是 I，得到 %q（原来只有 A..H）", seen[8])
+	}
+	if seen[26] != "AA" || seen[31] != "AF" {
+		t.Fatalf("26/31 应该是 AA/AF，得到 %q/%q", seen[26], seen[31])
+	}
+	if _, _, msg := bindSession(doc, "default", sessionRef{SID: "s-32", Name: "#32 h"}, ""); msg == "" || !contains(msg, "32") {
+		t.Fatalf("第 33 条必须被拒并说明上限：%q", msg)
+	}
 }

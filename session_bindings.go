@@ -21,7 +21,7 @@ import (
 
 const (
 	bindingsFile    = "mcp-bindings.json"
-	maxAliases      = 8
+	maxAliases      = 32
 	bindingTTL      = 12 * time.Hour
 	bindingsVersion = 1
 )
@@ -172,13 +172,30 @@ func bindingByAlias(cb clientBindings, alias string) (bindingEntry, bool) {
 	return bindingEntry{}, false
 }
 
+// aliasName 第 n 个默认别名的名字（0→A … 25→Z, 26→AA, 27→AB …），与扩展侧同一套规则。
+func aliasName(index int) string {
+	n := index
+	if n < 0 {
+		n = 0
+	}
+	var chars []byte
+	for {
+		chars = append([]byte{byte('A' + n%26)}, chars...)
+		n = n/26 - 1
+		if n < 0 {
+			break
+		}
+	}
+	return string(chars)
+}
+
 func nextAlias(cb clientBindings) string {
 	used := map[string]bool{}
 	for a := range cb.Sessions {
 		used[strings.ToUpper(a)] = true
 	}
 	for i := 0; i < maxAliases; i++ {
-		a := string(rune('A' + i))
+		a := aliasName(i)
 		if !used[a] {
 			return a
 		}
