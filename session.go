@@ -96,6 +96,8 @@ type bastionSession struct {
 	sid string
 	// cursor 屏幕游标：每来一块输出 +1（P2-a 的乐观并发校验；桌面版暂只上报）
 	cursor atomic.Int64
+	// activeJob 当前正在捕获的作业（exec 返回后仍然挂着，靠 observe 持续喂日志）
+	activeJob *execJob
 
 	// ready 会话「画完第一屏」了就关掉它。
 	// 为什么需要：刚 open shell 时远端还在打 MOTD / 堡垒机还在画菜单，
@@ -381,6 +383,13 @@ func (s *bastionSession) waitTransfer(wait chan struct{}, what string) error {
 func (s *bastionSession) observe(b []byte) {
 	s.tail.write(b)
 	s.cursor.Add(1)
+	// 作业捕获挂在唯一输出汇上（与扩展侧同一设计）：exec 返回后仍能继续收日志
+	if j := s.activeJob; j != nil {
+		j.appendOutput(b)
+		if p, h, ok := detectInputPrompt(string(b)); ok {
+			j.markInputRequired(p, h)
+		}
+	}
 }
 
 // ── 会话就绪（第一屏画完） ──

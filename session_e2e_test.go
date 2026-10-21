@@ -238,7 +238,7 @@ func TestE2EApiLayerEndToEnd(t *testing.T) {
 
 	// 先跑一条命令让会话落到 shell：**刚连上那一瞬间屏幕上还没有提示符**，
 	// 这时候状态是「未知」（照旧执行，不误拦）—— 那是如实汇报，不是 bug。
-	pre, err := api.Exec("echo warmup", s.name())
+	pre, err := api.Exec(execArgs{Command: "echo warmup", Session: s.name()})
 	if err != nil {
 		t.Fatalf("warmup Exec 出错：%v", err)
 	}
@@ -265,7 +265,7 @@ func TestE2EApiLayerEndToEnd(t *testing.T) {
 	}
 
 	// exec：终端名按名字指定，输出带退出码
-	out, err = api.Exec("echo via-api", s.name())
+	out, err = api.Exec(execArgs{Command: "echo via-api", Session: s.name()})
 	if err != nil {
 		t.Fatalf("Exec 出错：%v", err)
 	}
@@ -274,7 +274,7 @@ func TestE2EApiLayerEndToEnd(t *testing.T) {
 	}
 
 	// 指定不存在的会话：要说清去哪儿找，而不是猜一条
-	out, _ = api.Exec("echo x", "不存在的会话名")
+	out, _ = api.Exec(execArgs{Command: "echo x", Session: "不存在的会话名"})
 	if !strings.Contains(out, "找不到会话") || !strings.Contains(out, "bastion_listSessions") {
 		t.Fatalf("找不到会话时的提示不合格：%q", out)
 	}

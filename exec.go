@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"regexp"
 	"strconv"
@@ -168,6 +169,8 @@ type execOpts struct {
 	NoDataMs int
 	// AllowPlainSudo 免密 sudo 时才敢给 `sudo <命令>` 加哨兵
 	AllowPlainSudo bool
+	// Job 绑定的作业（输出会持续喂给它；超时返回后作业继续收日志）
+	Job *execJob
 }
 
 // execResult 一条命令的结果
@@ -176,6 +179,9 @@ type execResult struct {
 	ExitCode   *int
 	MarkerSeen bool
 	MarkerSafe bool
+	// TimedOut 到 MaxMs 还在跑（**不是失败**：作业继续，AI 用 job/wait 跟进）
+	TimedOut  bool
+	ElapsedMs int64
 }
 
 // exec 在会话上执行一条命令：命令写进终端（人实时看得见回显与输出），
@@ -226,6 +232,9 @@ func (s *bastionSession) exec(command string, opts execOpts) (execResult, error)
 		cmd += "; ec=$?\necho " + marker + ":$ec"
 	}
 
+	if opts.Job != nil {
+		s.activeJob = opts.Job
+	}
 	mark := s.tail.mark()
 	started := time.Now()
 	if err := s.writeCommand(cmd); err != nil {
@@ -236,6 +245,7 @@ func (s *bastionSession) exec(command string, opts execOpts) (execResult, error)
 	deadline := started.Add(time.Duration(maxMs) * time.Millisecond)
 	noDataDeadline := started.Add(time.Duration(noDataMs) * time.Millisecond)
 	seen := false
+	timedOut := false
 	var rc *int
 
 	for {
@@ -254,6 +264,7 @@ func (s *bastionSession) exec(command string, opts execOpts) (execResult, error)
 			break
 		}
 		if time.Now().After(deadline) {
+			timedOut = true
 			break
 		}
 		if s.closed.Load() {
@@ -270,11 +281,29 @@ func (s *bastionSession) exec(command string, opts execOpts) (execResult, error)
 	if safe {
 		text = stripMarker(text, marker)
 	}
+	elapsed := time.Since(started).Milliseconds()
+	if opts.Job != nil {
+		if timedOut {
+			// 超时不是失败：命令还在跑，作业继续收输出（AI 用 bastion_job / bastion_wait 跟进）
+			log.Printf("[作业 %s] %d ms 还没结束，转后台继续捕获", opts.Job.id, elapsed)
+		} else {
+			var code int
+			if rc != nil {
+				code = *rc
+			}
+			opts.Job.complete(code, rc != nil, !safe || seen)
+			if s.activeJob == opts.Job {
+				s.activeJob = nil
+			}
+		}
+	}
 	return execResult{
 		Output:     text,
 		ExitCode:   rc,
 		MarkerSeen: !safe || seen,
 		MarkerSafe: safe,
+		TimedOut:   timedOut,
+		ElapsedMs:  elapsed,
 	}, nil
 }
 

@@ -106,7 +106,7 @@ func TestE2EProfileDrivesHabitsOnRealSession(t *testing.T) {
 	}
 
 	// ④ 真在这条会话上跑一条命令，确认档案/习惯这套没把会话弄坏
-	out, err := (desktopSessionAPI{}).Exec("echo profile-habit-ok", s.name())
+	out, err := (desktopSessionAPI{}).Exec(execArgs{Command: "echo profile-habit-ok", Session: s.name()})
 	if err != nil || !strings.Contains(out, "profile-habit-ok") {
 		t.Fatalf("exec 出问题：%v / %q", err, out)
 	}

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // 会话能力的实现层：MCP 工具层（mcp_tools.go）注入的就是它。
@@ -195,12 +197,33 @@ func (desktopSessionAPI) Tail(terminal string, lines int) (string, error) {
 //  3. **高危命令拦截**：命中规则就**不发**，把原因说清楚（规则来自共享文件）
 //  4. 执行 + 退出码备注（没有它，AI 只能靠读输出猜命令成没成）
 //  5. sudo 密码提示单独说清楚（这是唯一需要人接手的常见情况）
-func (desktopSessionAPI) Exec(command, terminal string) (string, error) {
-	cmd := strings.TrimSpace(command)
+//
+// execArgs 桌面版 bastion_exec 的参数（与扩展侧同名字段，语义一致）
+type execArgs struct {
+	Command    string
+	Session    string
+	Terminal   string
+	WaitMs     int64
+	QuietMs    int64
+	Mode       string
+	Background bool
+	Force      bool
+}
+
+// Exec bastion_exec：在会话上执行命令，返回**结构化状态**。
+//
+// 与扩展侧同一套语义（docs/exec-protocol.md）：completed / working / input_required /
+// failed / cancelled。超时不是失败 —— 作业继续收日志，AI 用 bastion_job / bastion_wait 跟进。
+func (desktopSessionAPI) Exec(args execArgs) (string, error) {
+	cmd := strings.TrimSpace(args.Command)
 	if cmd == "" {
 		return "错误：bastion_exec 需要 command 参数（要执行的命令）", nil
 	}
-	s, errMsg := lookupSession(terminal, "write")
+	sel := args.Session
+	if strings.TrimSpace(sel) == "" {
+		sel = args.Terminal
+	}
+	s, errMsg := lookupSession(sel, "write")
 	if errMsg != "" {
 		return errMsg, nil
 	}
@@ -217,11 +240,55 @@ func (desktopSessionAPI) Exec(command, terminal string) (string, error) {
 	profileName := profileNameForSession(s)
 	privilege := resolvePrivilege(currentHabits(), profileName)
 
-	res, err := s.exec(cmd, execOpts{AllowPlainSudo: privilege == privSudo})
+	// 同一会话只允许一条命令在跑（否则新命令会喂给正在运行的程序）
+	if running := activeJobOf(s.id); running != nil && !args.Force {
+		return fmt.Sprintf("拒绝执行：会话 %s 上还有一条命令在跑（作业 %s，已 %d 秒）。\n"+
+			"**不要重发命令**：用 bastion_wait({jobId:\"%s\"}) 等、bastion_job({jobId:\"%s\"}) 读增量日志、"+
+			"或 bastion_cancel({jobId:\"%s\"}) 停掉它。确实要插队传 force=true。",
+			labels[s.id], running.id, time.Since(running.startedAt)/time.Second, running.id, running.id, running.id), nil
+	} else if running != nil {
+		running.fail("force_superseded")
+	}
+
+	// interactive：只发不等（top / vi / sudo -i / 菜单）
+	if args.Mode == "interactive" {
+		if err := s.writeCommand(cmd); err != nil {
+			return fmt.Sprintf("执行失败（会话 %s）：%v", labels[s.id], err), nil
+		}
+		return fmt.Sprintf("已发出（interactive 模式：只发不等）：%s\n"+
+			"这类命令会占着终端，拿不到可靠输出。用 bastion_tail 看屏幕现状；人工接手也走同一条会话。", cmd), nil
+	}
+
+	quietMs := args.QuietMs
+	if quietMs <= 0 {
+		quietMs = 15000 // 旧值是 3s —— 长构建阶段间静默几十秒，会被误判成结束
+	}
+	waitMs := args.WaitMs
+	if waitMs <= 0 {
+		waitMs = 15000
+	}
+	if args.Background {
+		waitMs = 1 // 立刻返回：作业在后台继续收日志
+	}
+	if waitMs > int64(waitBudget/time.Millisecond) {
+		// 超过客户端单次调用预算：不阻塞，转成作业
+		waitMs = 1
+	}
+
+	job := createJob(s.id, s.cursor.Load(), cmd)
+	res, err := s.exec(cmd, execOpts{
+		AllowPlainSudo: privilege == privSudo,
+		QuietMs:        int(quietMs),
+		MaxMs:          int(waitMs),
+		Job:            job,
+	})
 	if err != nil {
+		job.fail("exec_error")
 		return fmt.Sprintf("执行失败（会话 %s）：%v", labels[s.id], err), nil
 	}
-	out := res.Output + exitCodeNote(res)
+
+	view := job.view(s.cursor.Load())
+	out := res.Output + statusLine(view)
 	if looksLikePasswordPrompt(cmd, res.Output) {
 		out += "\n\n[⚠️ 需要密码] 这条命令正在等用户输入密码。请让用户到 BastionShell 窗口里手动输入完成认证" +
 			"（会话是同一条，不需要重新连接）；确认认证完成后，再用 bastion_exec 继续执行后续命令。"
@@ -234,7 +301,146 @@ func (desktopSessionAPI) Exec(command, terminal string) (string, error) {
 				"请用 bastion_habits 的 setPrivilege / remember 把结论记下来，以后就不用再问了。", orGlobal(profileName))
 		}
 	}
+	if b, err := json.Marshal(view); err == nil {
+		out += "\n\n[job] " + string(b)
+	}
 	return out, nil
+}
+
+// statusLine 把状态翻成人话（与扩展侧的 statusLine 一一对应）
+func statusLine(v jobView) string {
+	secs := v.ElapsedMs / 1000
+	switch v.Status {
+	case statusInputRequired:
+		return fmt.Sprintf("\n\n[⏸ 需要人工输入：%s] %s\n（作业 %s；用户输入后命令会自己往下走，用 bastion_wait 接着等）",
+			v.Prompt, v.Hint, v.JobID)
+	case statusWorking:
+		moved := "屏幕没再动过"
+		if v.CursorMoved {
+			moved = "屏幕有新输出"
+		}
+		return fmt.Sprintf("\n\n[⏳ 还在跑：作业 %s，已 %ds，cursor=%d（%s），最后一行：%s]\n"+
+			"**不要重发这条命令**（会重复执行）。用 bastion_wait({jobId:\"%s\"}) 等、"+
+			"bastion_job({jobId:\"%s\"}) 读增量日志，或 bastion_cancel 停掉。",
+			v.JobID, secs, v.Cursor, moved, orEmpty(v.LastLine, "（空）"), v.JobID, v.JobID)
+	case statusCancelled:
+		return fmt.Sprintf("\n\n[⛔ 已取消：作业 %s]", v.JobID)
+	case statusFailed:
+		return fmt.Sprintf("\n\n[退出码 %d：命令以非 0 退出，通常表示失败 —— 结合输出判断原因]", v.ExitCode)
+	}
+	if !v.MarkerSeen {
+		return "\n\n[退出码未知：没拿到结束标记（输出静止就返回了）。上面的输出可能不完整 —— " +
+			"用 bastion_tail 看屏幕现状，或 bastion_job 读完整日志]"
+	}
+	return fmt.Sprintf("\n\n[退出码 %d：命令成功]", v.ExitCode)
+}
+
+func orEmpty(s, def string) string {
+	if strings.TrimSpace(s) == "" {
+		return def
+	}
+	return s
+}
+
+// Wait bastion_wait：等作业结束 / 等某个正则出现（服务端阻塞，不消耗 AI 轮次）
+func (desktopSessionAPI) Wait(jobID, pattern string, waitMs, sinceOffset int64) (string, error) {
+	job := getJob(jobID)
+	if job == nil {
+		return fmt.Sprintf("找不到作业「%s」（作业只在本次 BastionShell 运行期间有效）。", jobID), nil
+	}
+	from := sinceOffset
+	if from < 0 {
+		from = job.endOffset()
+	}
+	view := job.waitFor(pattern, waitMs, from, func() int64 {
+		if s := sessionByID(job.sessionID); s != nil {
+			return s.cursor.Load()
+		}
+		return 0
+	})
+	out := ""
+	if pattern != "" {
+		if line := job.matchedLine(pattern, from); line != "" {
+			out = fmt.Sprintf("\n✅ 匹配到「%s」：%s", pattern, line)
+		} else {
+			out = fmt.Sprintf("\n（还没匹配到「%s」）", pattern)
+		}
+	}
+	head := ""
+	switch view.Status {
+	case statusWorking:
+		head = fmt.Sprintf("作业 %s 还在跑（已 %ds，最后一行：%s）", job.id, view.ElapsedMs/1000, orEmpty(view.LastLine, "（空）"))
+	case statusInputRequired:
+		head = fmt.Sprintf("作业 %s 在等人工输入：%s（%s）", job.id, view.Prompt, view.Hint)
+	case statusCompleted:
+		head = fmt.Sprintf("作业 %s 已完成（退出码 %d，用时 %ds）", job.id, view.ExitCode, view.ElapsedMs/1000)
+	default:
+		head = fmt.Sprintf("作业 %s 结束：%s（退出码 %d）", job.id, view.Status, view.ExitCode)
+	}
+	chunk, _, _ := job.sliceFrom(maxInt64(0, job.endOffset()-4000), 4000)
+	text := head + out + "\n\n—— 输出（尾部）——\n" + chunk
+	if b, err := json.Marshal(view); err == nil {
+		text += "\n\n[job] " + string(b)
+	}
+	return text, nil
+}
+
+// Job bastion_job：按字节偏移增量读作业日志
+func (desktopSessionAPI) Job(jobID string, sinceOffset int64, maxBytes int) (string, error) {
+	job := getJob(jobID)
+	if job == nil {
+		return fmt.Sprintf("找不到作业「%s」（作业只在本次 BastionShell 运行期间有效）。", jobID), nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = 64 * 1024
+	}
+	from := sinceOffset
+	if from < 0 {
+		from = 0
+	}
+	chunk, next, truncated := job.sliceFrom(from, maxBytes)
+	view := job.view(0)
+	head := fmt.Sprintf("作业 %s｜状态 %s｜退出码 %d｜共 %d 字节｜本次 [%d, %d)",
+		job.id, view.Status, view.ExitCode, job.endOffset(), from, next)
+	text := head + "\n\n" + orEmpty(chunk, "（这一段没有内容）")
+	if truncated {
+		text += fmt.Sprintf("\n\n[还有更多：下次传 sinceOffset=%d]", next)
+	}
+	meta := map[string]any{"jobId": job.id, "status": view.Status, "sinceOffset": from, "nextOffset": next, "truncated": truncated}
+	if b, err := json.Marshal(meta); err == nil {
+		text += "\n\n[job] " + string(b)
+	}
+	return text, nil
+}
+
+// Cancel bastion_cancel：往会话发 Ctrl-C，并把作业标记为取消
+func (desktopSessionAPI) Cancel(jobID string) (string, error) {
+	job := getJob(jobID)
+	if job == nil {
+		return fmt.Sprintf("找不到作业「%s」（作业只在本次 BastionShell 运行期间有效）。", jobID), nil
+	}
+	s := sessionByID(job.sessionID)
+	if s == nil {
+		job.fail("session_lost")
+		return fmt.Sprintf("作业 %s 所在的会话已经关闭了（已标记为失败：session_lost）。", job.id), nil
+	}
+	if job.terminalState() {
+		return fmt.Sprintf("作业 %s 已经结束（%s），不需要取消。", job.id, job.view(0).Status), nil
+	}
+	if _, err := s.stdin.Write([]byte{0x03}); err != nil {
+		return fmt.Sprintf("发送 Ctrl-C 失败：%v", err), nil
+	}
+	job.cancel()
+	s.activeJob = nil
+	return fmt.Sprintf("已向会话 %s 发送 Ctrl-C（作业 %s 标记为 cancelled）。如果命令自己忽略 SIGINT，可能停不下来 —— 用 bastion_tail 看一眼屏幕确认。",
+		s.id, job.id), nil
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // Push bastion_push：把本机文件（或目录）传到远端。

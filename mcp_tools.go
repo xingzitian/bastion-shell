@@ -24,10 +24,14 @@ import (
 type mcpSessionAPI interface {
 	ListSessions() (string, error)
 	Use(session, alias string, unbind bool) (string, error)
+	// 作业三件套（与扩展侧同语义）
+	Wait(jobID, pattern string, waitMs, sinceOffset int64) (string, error)
+	Job(jobID string, sinceOffset int64, maxBytes int) (string, error)
+	Cancel(jobID string) (string, error)
 	Health() (string, error)
 	ListProfiles() (string, error)
 	Tail(terminal string, lines int) (string, error)
-	Exec(command, terminal string) (string, error)
+	Exec(args execArgs) (string, error)
 	Habits(action, profile, habit, privilege string) (string, error)
 	Push(localPath, remoteDir, terminal string) (string, error)
 	Pull(remotePath, localDir, terminal string) (string, error)
@@ -66,6 +70,18 @@ const mcpTailDesc = "读某条会话**屏幕上最后几行**（默认 40 行，
 	"- 命令看起来没反应、输出不完整、或者你不确定远端现在是什么状态时，**看一眼屏幕**再决定下一步；\n" +
 	"- 用户在终端里手动操作完（过了菜单、输了密码、选了目标机）之后，用它确认走到了哪一步；\n" +
 	"- 它返回的是屏幕上真正渲染出来的文字（去掉颜色码），比你手里的输出拼接更接近现状。"
+
+const mcpWaitDesc = "等一个作业（bastion_exec 返回 working 时给的 jobId）。这是**不要用 sleep 硬等**的正解：" +
+	"等待发生在服务端，不消耗你的轮次。\n" +
+	"- 满足任一条件就返回：作业结束（completed/failed/cancelled）、pattern 命中、超时（仍在跑）。\n" +
+	"- pattern 是正则，默认只在本次调用以来的新增输出里找。\n" +
+	"- 一轮最多 55 秒（客户端单次调用预算内）。没等到就再调一次，**不要重发原来的命令**。"
+
+const mcpJobDesc = "按字节偏移**增量读**某个作业的完整日志（终端滚屏也不会丢）。\n" +
+	"- sinceOffset 从上一页的 nextOffset 接着读，直到 truncated=false。\n" +
+	"- 输出很大时用它分页，不要用 bastion_tail（那只给屏幕末尾几十行）。"
+
+const mcpCancelDesc = "取消一个还在跑的作业：往那条会话发 Ctrl-C，并把作业标记为 cancelled（协作式，不保证立刻停）。"
 
 const mcpExecDesc = "在一个**已经认证好**的 BastionShell 会话上执行 shell 命令，并返回命令输出。\n" +
 	"这是操作远端服务器的主要手段。注意：\n" +
@@ -178,6 +194,53 @@ var mcpToolDefs = []mcpToolDef{
 				},
 			},
 			"required":             []string{"command"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:        "bastion_wait",
+		Title:       "等作业（完成 / 等某个输出出现）",
+		Description: mcpWaitDesc,
+		ReadOnly:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"jobId":       map[string]any{"type": "string", "description": "作业 id（bastion_exec 返回里的 jobId）"},
+				"pattern":     map[string]any{"type": "string", "description": "要等的正则片段（例如 阶段 5/9 完成）；不填就是纯等结束"},
+				"waitMs":      map[string]any{"type": "number", "description": "最多等多久（默认 20000，服务端夹到 55000）"},
+				"sinceOffset": map[string]any{"type": "number", "description": "从哪个字节偏移之后开始找 pattern（默认从现在开始）"},
+			},
+			"required":             []string{"jobId"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:        "bastion_job",
+		Title:       "读作业日志（增量）",
+		Description: mcpJobDesc,
+		ReadOnly:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"jobId":       map[string]any{"type": "string", "description": "作业 id"},
+				"sinceOffset": map[string]any{"type": "number", "description": "从哪个字节偏移开始读（默认 0）"},
+				"maxBytes":    map[string]any{"type": "number", "description": "这次最多读多少字节（默认 65536）"},
+			},
+			"required":             []string{"jobId"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:        "bastion_cancel",
+		Title:       "取消作业",
+		Description: mcpCancelDesc,
+		ReadOnly:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"jobId": map[string]any{"type": "string", "description": "作业 id"},
+			},
+			"required":             []string{"jobId"},
 			"additionalProperties": false,
 		},
 	},
@@ -297,7 +360,22 @@ func mcpDispatch(api mcpSessionAPI, name string, args map[string]any) (mcpToolRe
 		if len(command) == 0 || strings.TrimSpace(command) == "" {
 			return mcpToolResult{Text: "错误：bastion_exec 需要 command 参数（要执行的命令）", IsError: true}, nil
 		}
-		return call(api.Exec(command, str("terminal")))
+		return call(api.Exec(execArgs{
+			Command:    command,
+			Session:    str("session"),
+			Terminal:   str("terminal"),
+			WaitMs:     intArg(args["waitMs"]),
+			QuietMs:    intArg(args["quietMs"]),
+			Mode:       str("mode"),
+			Background: boolArg(args["background"]),
+			Force:      boolArg(args["force"]),
+		}))
+	case "bastion_wait":
+		return call(api.Wait(str("jobId"), str("pattern"), intArg(args["waitMs"]), intArg(args["sinceOffset"])))
+	case "bastion_job":
+		return call(api.Job(str("jobId"), intArg(args["sinceOffset"]), int(intArg(args["maxBytes"]))))
+	case "bastion_cancel":
+		return call(api.Cancel(str("jobId")))
 	case "bastion_push":
 		localPath := str("localPath")
 		if strings.TrimSpace(localPath) == "" {
@@ -345,3 +423,22 @@ const mcpInstructions = "BastionShell 提供的是**用户已经手动认证过*
 	"2. 还失败就调 **bastion_health**：它能返回 → 端点是好的，回到第 1 步重试或换个工具；\n" +
 	"3. 连 bastion_health 都调不动 → 端点没在跑，请**明确告诉用户**重启 BastionShell，然后再试；\n" +
 	"4. 无论哪种情况，都**不要**因为一次失败就转去让用户手工执行命令 —— 那会把「一个可修的小问题」变成「用户自己干活」。"
+
+// intArg 从 JSON 参数里取整数（缺省 0）
+func intArg(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	}
+	return 0
+}
+
+// boolArg 从 JSON 参数里取布尔（缺省 false）
+func boolArg(v any) bool {
+	b, _ := v.(bool)
+	return b
+}

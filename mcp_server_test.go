@@ -39,9 +39,21 @@ func (f *fakeAPI) Tail(terminal string, lines int) (string, error) {
 	f.lastTerminal = terminal
 	return "屏幕内容", f.err
 }
-func (f *fakeAPI) Exec(command, terminal string) (string, error) {
-	f.lastCommand, f.lastTerminal = command, terminal
+func (f *fakeAPI) Exec(args execArgs) (string, error) {
+	f.lastCommand, f.lastTerminal = args.Command, args.Terminal
 	return "命令输出", f.err
+}
+
+func (f *fakeAPI) Wait(jobID, pattern string, waitMs, sinceOffset int64) (string, error) {
+	return "等作业 " + jobID, f.err
+}
+
+func (f *fakeAPI) Job(jobID string, sinceOffset int64, maxBytes int) (string, error) {
+	return "作业日志 " + jobID, f.err
+}
+
+func (f *fakeAPI) Cancel(jobID string) (string, error) {
+	return "已取消 " + jobID, f.err
 }
 func (f *fakeAPI) Habits(action, profile, habit, privilege string) (string, error) {
 	f.lastAction, f.lastProfile = action, profile
@@ -128,8 +140,8 @@ func TestMcpToolsList(t *testing.T) {
 	_, body := rpc(t, srv, testToken, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res, _ := body["result"].(map[string]any)
 	tools, _ := res["tools"].([]any)
-	if len(tools) != 9 {
-		t.Fatalf("桌面版应该暴露 9 个工具（P0a 加了 bastion_use），得到 %d 个", len(tools))
+	if len(tools) != 12 {
+		t.Fatalf("桌面版应该暴露 12 个工具（P0a 加 bastion_use，0.3.9 加 wait/job/cancel），得到 %d 个", len(tools))
 	}
 	names := map[string]bool{}
 	readOnly := map[string]bool{}
