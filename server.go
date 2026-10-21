@@ -135,6 +135,7 @@ func serveBackend(port int) error {
 	registerQuickCommandRoutes(mux)
 	registerDeployRoutes(mux)
 	registerSecretRoutes(mux, newSecretStore())
+	registerAiAccessRoutes(mux)
 	registerMcpInfoRoute(mux)
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	log.Printf("后端服务已启动: http://%s", addr)

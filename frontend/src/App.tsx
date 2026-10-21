@@ -10,6 +10,8 @@ import { SplitPane } from './components/SplitPane'
 import { BroadcastBar } from './components/BroadcastBar'
 import { SyncDialog } from './components/SyncDialog'
 import { PortsPanel } from './components/PortsPanel'
+import { AiAccessDialog } from './components/AiAccessDialog'
+import type { AiAccess } from './shared/types'
 import { DeployDialog } from './components/DeployDialog'
 import { bus } from './lib/bus'
 import { findGroupOfSession, collectGroupIds } from './lib/groupTree'
@@ -73,6 +75,19 @@ export default function App() {
   const [showTheme, setShowTheme] = useState(false)
   const [showSync, setShowSync] = useState(false)
   const [showPorts, setShowPorts] = useState<{ connectionId: string; profileId: string } | null>(null)
+  const [showAiAccess, setShowAiAccess] = useState(false)
+  const [aiAccess, setAiAccess] = useState<AiAccess | null>(null)
+
+  /** 打开「AI 访问」：先拉一次数据再显示（解绑后也走它刷新） */
+  const openAiAccess = async (): Promise<void> => {
+    try {
+      const data = await window.bastion.getAiAccess()
+      setAiAccess(data)
+      setShowAiAccess(true)
+    } catch {
+      /* 后端没起来时静默：页面会显示读取失败 */
+    }
+  }
   const [deployTarget, setDeployTarget] = useState<ConnectionInfo | null>(null)
   const [deployProgress, setDeployProgress] = useState<{
     taskName: string
@@ -623,6 +638,9 @@ export default function App() {
             ⇅ 同步
           </button>
         </div>
+          <button className="sidebar-tool-btn" title="AI 访问：权限与绑定（与扩展共用绑定文件）" onClick={() => void openAiAccess()}>
+            🤖 AI
+          </button>
 
         {quickCommands.length > 0 && (
           <div className="qc-column">
@@ -896,6 +914,20 @@ export default function App() {
       )}
 
       {authPrompt && <AuthPromptDialog prompt={authPrompt} onSubmit={submitAuth} onCancel={cancelAuth} />}
+
+      {showAiAccess && aiAccess && (
+        <AiAccessDialog
+          data={aiAccess}
+          onClose={() => setShowAiAccess(false)}
+          onRefresh={async () => {
+            try {
+              setAiAccess(await window.bastion.getAiAccess())
+            } catch {
+              /* 后端没起来：保留旧数据 */
+            }
+          }}
+        />
+      )}
 
       {showQcManager && (
         <QuickCommandsDialog

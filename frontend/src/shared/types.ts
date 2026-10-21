@@ -257,6 +257,49 @@ export interface DeployTask {
   userChoice: string
 }
 
+/** 「AI 访问」页的数据（桌面版单令牌 + 与扩展共用的绑定文件） */
+export interface AiBinding {
+  alias: string
+  sessionId: string
+  name: string
+}
+
+export interface AiClient {
+  clientId: string
+  label: string
+  scope: string
+  scopeLabel: string
+  plain: string
+  can: string[] | null
+  cannot: string[] | null
+  isMain: boolean
+  /** 扩展侧创建的客户端（桌面版只显示、权限在扩展侧管） */
+  external: boolean
+  bindings: AiBinding[]
+}
+
+export interface AiSessionOwner {
+  clientId: string
+  label: string
+  alias: string
+}
+
+export interface AiSession {
+  id: string
+  name: string
+  owners: AiSessionOwner[]
+}
+
+export interface AiAccess {
+  endpoint: string
+  tokenMasked: string
+  token: string
+  mainOnly: boolean
+  clients: AiClient[]
+  sessions: AiSession[]
+  bindingsFile: string
+  note: string
+}
 /** preload 暴露给渲染进程的 API 形状 */
 export interface BastionApi {
   connect(req: ConnectRequest): Promise<{ connectionId: string }>
@@ -302,6 +345,9 @@ export interface BastionApi {
   readClipboard(): Promise<string>
   /** 写入系统剪贴板（供远端 vim OSC 52 复制桥接使用） */
   writeClipboard(text: string): void
+  /** AI 访问页：令牌 / 权限 / 绑定 */
+  getAiAccess(): Promise<AiAccess>
+  unbindAiBinding(payload: { clientId: string; alias?: string; sessionId?: string }): Promise<{ ok: boolean }>
   listProfiles(): Promise<ConnectionProfile[]>
   saveProfile(profile: ConnectionProfile): Promise<ConnectionProfile>
   deleteProfile(id: string): Promise<void>

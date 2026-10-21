@@ -257,6 +257,19 @@
 
   // ---- 数据存储（localStorage）----
 
+  // 「AI 访问」页：桌面版单令牌 + 绑定（与扩展侧共用同一份绑定文件）
+  function getAiAccess() {
+    return fetch(API_BASE + '/api/ai-access')
+      .then(function (r) { return r.json(); })
+      .catch(function () { return { clients: [], sessions: [], note: '读取失败（后端没起来？）' }; });
+  }
+  function unbindAiBinding(payload) {
+    return fetch(API_BASE + '/api/ai-access/unbind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {})
+    }).then(function (r) { return r.json(); });
+  }
   // 档案
   //
   // ⚠️ **档案存的是共享文件**（~/.bastionshell/profiles.jsonc，Go 侧读写），
@@ -531,6 +544,8 @@
     pickPrivateKey: pickPrivateKey,
     readClipboard: readClipboard,
     writeClipboard: writeClipboard,
+    getAiAccess: getAiAccess,
+    unbindAiBinding: unbindAiBinding,
     listProfiles: listProfiles,
     saveProfile: saveProfile,
     deleteProfile: deleteProfile,

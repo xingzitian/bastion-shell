@@ -1821,3 +1821,20 @@ body {
 .split-dd-menu button.danger:hover {
   color: var(--danger);
 }
+
+/* ── AI 访问（桌面版）────────────────────────────────────────── */
+.ai-modal { width: min(720px, 92vw); max-height: 82vh; overflow: auto; }
+.ai-note { background: rgba(255, 200, 0, 0.08); border-left: 3px solid rgba(255, 200, 0, 0.5);
+  padding: 6px 8px; border-radius: 3px; font-size: 12px; margin: 8px 0 12px; line-height: 1.5; }
+.ai-endpoint { background: rgba(255, 255, 255, 0.04); border-radius: 4px; padding: 8px 10px; font-size: 12px; }
+.ai-endpoint code { font-family: ui-monospace, monospace; }
+.ai-msg { font-size: 12px; margin-top: 6px; color: #9be28b; }
+.ai-client { margin: 8px 0; }
+.ai-client-name { font-weight: 600; }
+.ai-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px; margin-top: 4px; }
+.chip { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px;
+  background: rgba(255, 255, 255, 0.09); margin-left: 4px; }
+.chip.ok { background: rgba(80, 200, 120, 0.18); }
+.chip.err { background: rgba(220, 90, 80, 0.18); }
+.ai-binding { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 5px 0; border-top: 1px solid rgba(255, 255, 255, 0.07); font-size: 12px; }
