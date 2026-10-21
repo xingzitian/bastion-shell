@@ -92,6 +92,11 @@ type bastionSession struct {
 	closed    atomic.Bool
 	closeOnce sync.Once
 
+	// sid 不可变会话 id（AI 绑定/工具指认用；与扩展侧同一契约，形如 s-7f3a）
+	sid string
+	// cursor 屏幕游标：每来一块输出 +1（P2-a 的乐观并发校验；桌面版暂只上报）
+	cursor atomic.Int64
+
 	// ready 会话「画完第一屏」了就关掉它。
 	// 为什么需要：刚 open shell 时远端还在打 MOTD / 堡垒机还在画菜单，
 	// 这时候把命令写进去会被当成还没画完那一屏的输入（VS Code 版对应 shellReady）。
@@ -375,6 +380,7 @@ func (s *bastionSession) waitTransfer(wait chan struct{}, what string) error {
 // observe 输出落地：写进滚动缓冲（这是「屏幕快照」和命令完成判定的唯一数据源）
 func (s *bastionSession) observe(b []byte) {
 	s.tail.write(b)
+	s.cursor.Add(1)
 }
 
 // ── 会话就绪（第一屏画完） ──
@@ -570,41 +576,81 @@ func lastActiveSession() *bastionSession {
 	return nil
 }
 
-// lookupSession 按终端名/会话 id 找会话；want 为空则用最近活动的那条。
-// 返回的字符串非空表示「没找到」，内容就是要回给 AI 的话。
-func lookupSession(want string) (*bastionSession, string) {
+// lookupSession 按「会话 id / 完整名 / 别名 / 唯一片段」找会话（契约见 docs/session-identity.md）。
+//
+// mode 决定"没指定会话"时的行为：
+//   - "write"（exec / push / pull）：只认调用者自己的绑定；没有或有多条一律**拒绝**，
+//     绝不回退到"最近活动的那条" —— 那正是命令打到错机器上的根源。
+//   - "read"（tail）：没有绑定时允许回退到最近活动的会话（并在调用方说明用了哪条）。
+//
+// 返回的字符串非空表示「没找到 / 被拒绝」，内容就是要回给 AI 的话。
+func lookupSession(want, mode string) (*bastionSession, string) {
 	sessions := listSessions()
-	if len(sessions) == 0 {
-		return nil, "没有活动堡垒机会话：请先在 BastionShell 里连一台机器（连接 + 进入 shell），" +
-			"之后 AI 就能在**同一条会话**上执行命令，不需要重新认证。"
-	}
-	w := strings.TrimSpace(want)
-	if w == "" {
-		if s := lastActiveSession(); s != nil {
-			return s, ""
-		}
-		return sessions[0], ""
-	}
+	labels := sessionLabels()
+	refs := make([]sessionRef, 0, len(sessions))
+	bySID := map[string]*bastionSession{}
 	for _, s := range sessions {
-		if s.id == w {
-			return s, ""
+		if s.sid == "" {
+			s.sid = newSessionSID()
+		}
+		refs = append(refs, sessionRef{
+			SID:    s.sid,
+			Name:   labels[s.id],
+			State:  sessionStateLabel(s.screenState()),
+			Cursor: s.cursor.Load(),
+		})
+		bySID[s.sid] = s
+	}
+	doc := loadBindings()
+	live := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		live[r.SID] = true
+	}
+	if cleanupBindings(doc, live) {
+		saveBindings(doc)
+	}
+	// 读操作的回退目标：最近活动的会话
+	var fallback *sessionRef
+	if last := lastActiveSession(); last != nil {
+		for i := range refs {
+			if refs[i].SID == last.sid {
+				fallback = &refs[i]
+				break
+			}
 		}
 	}
-	for _, s := range sessions {
-		if s.name() == w {
-			return s, ""
-		}
+	ref, msg := resolveSessionRef(refs, want, mode, "default", doc, fallback, false)
+	if msg != "" {
+		log.Printf("会话解析被拒绝（%s）：%s", mode, msg)
+		return nil, msg
 	}
-	for _, s := range sessions {
-		if strings.Contains(s.name(), w) || strings.Contains(s.id, w) {
-			return s, ""
-		}
+	s := bySID[ref.SID]
+	if s == nil {
+		return nil, fmt.Sprintf("会话 %s 已经不在了，先 bastion_listSessions 重新选一条。", ref.SID)
 	}
-	return nil, fmt.Sprintf("找不到会话「%s」。先用 bastion_listSessions 看有哪些会话（名字形如 用户@主机）", w)
+	return s, ""
 }
 
-// sessionLabels 会话 id → 展示名。同一台堡垒机上开了多条时补 #2 #3，
-// 否则 AI 看到三行一模一样的 用户@主机 根本没法指定目标。
+// sessionRefsNow 当前所有会话的解析视图（ListSessions / bastion_use 用）
+func sessionRefsNow() ([]sessionRef, map[string]*bastionSession) {
+	sessions := listSessions()
+	labels := sessionLabels()
+	refs := make([]sessionRef, 0, len(sessions))
+	bySID := map[string]*bastionSession{}
+	for _, s := range sessions {
+		if s.sid == "" {
+			s.sid = newSessionSID()
+		}
+		refs = append(refs, sessionRef{
+			SID:    s.sid,
+			Name:   labels[s.id],
+			State:  sessionStateLabel(s.screenState()),
+			Cursor: s.cursor.Load(),
+		})
+		bySID[s.sid] = s
+	}
+	return refs, bySID
+}
 func sessionLabels() map[string]string {
 	sessions := listSessions()
 	count := map[string]int{}
@@ -707,6 +753,9 @@ func newBastionSession(o sessionOpts) (*bastionSession, error) {
 		ready:       make(chan struct{}),
 		created:     time.Now(),
 		downloadDir: downloadDir,
+	}
+	if s.sid == "" {
+		s.sid = newSessionSID()
 	}
 	if s.id == "" {
 		s.id = fmt.Sprintf("s%d%04d", time.Now().UnixNano()/1e6, rand.Intn(10000))

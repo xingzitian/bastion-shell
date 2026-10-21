@@ -28,6 +28,13 @@ type fakeAPI struct {
 func (f *fakeAPI) ListSessions() (string, error) { return "会话列表", f.err }
 func (f *fakeAPI) Health() (string, error)       { return "自检正常", f.err }
 func (f *fakeAPI) ListProfiles() (string, error) { return "档案列表", f.err }
+func (f *fakeAPI) Use(session, alias string, unbind bool) (string, error) {
+	f.lastAction = session
+	if unbind {
+		return "已解绑 " + session, f.err
+	}
+	return "已绑定 " + session, f.err
+}
 func (f *fakeAPI) Tail(terminal string, lines int) (string, error) {
 	f.lastTerminal = terminal
 	return "屏幕内容", f.err
@@ -121,8 +128,8 @@ func TestMcpToolsList(t *testing.T) {
 	_, body := rpc(t, srv, testToken, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	res, _ := body["result"].(map[string]any)
 	tools, _ := res["tools"].([]any)
-	if len(tools) != 8 {
-		t.Fatalf("桌面版应该暴露 8 个工具，得到 %d 个", len(tools))
+	if len(tools) != 9 {
+		t.Fatalf("桌面版应该暴露 9 个工具（P0a 加了 bastion_use），得到 %d 个", len(tools))
 	}
 	names := map[string]bool{}
 	readOnly := map[string]bool{}

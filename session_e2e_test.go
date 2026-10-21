@@ -212,7 +212,7 @@ func TestE2ESessionRegistryAndScreen(t *testing.T) {
 	}
 
 	// lookupSession 不指定名字时应该落到最近活动的会话
-	got, errMsg := lookupSession("")
+	got, errMsg := lookupSession("", "read")
 	if errMsg != "" || got == nil || got.id != s.id {
 		t.Fatalf("lookupSession(\"\") 应该返回最近的会话，得到 %v / %q", got, errMsg)
 	}

@@ -5,6 +5,7 @@
   "description": "BastionShell 桌面端前端（Wails WebView2 里跑的 React 界面）",
   "type": "module",
   "scripts": {
+    "test": "node --test test/*.test.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

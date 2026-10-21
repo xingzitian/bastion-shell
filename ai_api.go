@@ -19,13 +19,41 @@ type desktopSessionAPI struct{}
 func (desktopSessionAPI) ListSessions() (string, error) {
 	sessions := listSessions()
 	labels := sessionLabels()
+	doc := loadBindings()
+	live := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		if s.sid == "" {
+			s.sid = newSessionSID()
+		}
+		live[s.sid] = true
+	}
+	if cleanupBindings(doc, live) {
+		saveBindings(doc)
+	}
+	cb := doc.client("default")
 	rows := make([]string, 0, len(sessions))
 	for _, s := range sessions {
-		line := fmt.Sprintf("- %s：%s", labels[s.id], sessionStateLabel(s.screenState()))
-		// 目标机的提示符：同一个堡垒机上开了多条时，名字都一样，
-		// 只有屏幕上那行提示符认得出来「这条到底在哪台机器上」
+		own := doc.owners(s.sid)
+		alias := aliasOfSession(cb, s.sid)
+		tags := make([]string, 0, 2)
+		if alias != "" {
+			tags = append(tags, fmt.Sprintf("你的(%s)", alias))
+		}
+		var others []string
+		for _, o := range own {
+			if o != "default" {
+				others = append(others, o)
+			}
+		}
+		if len(others) > 0 {
+			tags = append(tags, "其他客户端: "+strings.Join(others, ","))
+		}
+		line := fmt.Sprintf("- %s  %s  cursor=%d  %s", s.sid, labels[s.id], s.cursor.Load(), sessionStateLabel(s.screenState()))
 		if p := s.lastPromptLine(); p != "" {
 			line += fmt.Sprintf("（屏幕最后一行：%s）", p)
+		}
+		if len(tags) > 0 {
+			line += "  " + strings.Join(tags, " · ")
 		}
 		rows = append(rows, line)
 	}
@@ -35,10 +63,48 @@ func (desktopSessionAPI) ListSessions() (string, error) {
 			"\n\n请让用户在 BastionShell 窗口里连接一台机器，并在终端里走到目标机的 shell" +
 			"（桌面版还没有菜单智能识别，这一步只能人工走），之后 AI 就能在**同一条会话**上执行命令。", nil
 	}
-	return fmt.Sprintf("当前堡垒机会话（%d 个）：\n%s\n\n", len(rows), strings.Join(rows, "\n")) +
+	return fmt.Sprintf("当前堡垒机会话（%d 个）：\n%s\n\n%s\n", len(rows), strings.Join(rows, "\n"), describeBindings(doc, "default")) +
 		"提示：这些都是**人和 AI 共用**的会话 —— 需要人工操作（MFA、选目标机、输密码、过菜单）时，" +
-		"请让用户在窗口里做完，然后你直接在这些会话上继续执行命令，不需要重新连接或认证。" +
+		"请让用户在窗口里做完，然后你直接在这些会话上继续执行命令，不需要重新连接或认证。\n" +
+		"⚠️ 执行命令（exec/push/pull）时要么传 session（id 或别名 A/B），要么先 bastion_use 绑定 —— 没绑定时不会替你猜。" +
 		note, nil
+}
+
+// Use bastion_use：把"这个客户端正在操作哪条会话"记在服务端（与扩展侧同一份绑定文件）
+func (desktopSessionAPI) Use(session, alias string, unbind bool) (string, error) {
+	sel := strings.TrimSpace(session)
+	if sel == "" {
+		return "错误：bastion_use 需要 session 参数（会话 id 如 s-7f3a，或终端名的一部分）", nil
+	}
+	refs, _ := sessionRefsNow()
+	doc := loadBindings()
+	if unbind {
+		cb := doc.client("default")
+		a := ""
+		if _, ok := bindingByAlias(cb, sel); ok {
+			a = sel
+		}
+		if !unbindSession(doc, "default", a, sel) {
+			return fmt.Sprintf("没有找到要解绑的 %s。%s", sel, describeBindings(doc, "default")), nil
+		}
+		saveBindings(doc)
+		return fmt.Sprintf("已解绑 %s。%s", sel, describeBindings(doc, "default")), nil
+	}
+	ref, msg := resolveSessionRef(refs, sel, "write", "default", doc, nil, false)
+	if msg != "" {
+		return msg, nil
+	}
+	a, existing, errMsg := bindSession(doc, "default", ref, alias)
+	if errMsg != "" {
+		return errMsg, nil
+	}
+	saveBindings(doc)
+	head := fmt.Sprintf("已绑定 %s = %s（%s）", a, ref.SID, ref.Name)
+	if existing {
+		head = fmt.Sprintf("%s 已经绑定为 %s 了（没有重复添加）", ref.SID, a)
+	}
+	return fmt.Sprintf("%s\n%s\n\n之后 bastion_exec 可以传 session: %q 或 %q；只绑了一条时不传也行。",
+		head, describeBindings(doc, "default"), a, ref.SID), nil
 }
 
 // Health bastion_health：端点自检。
@@ -100,7 +166,7 @@ func (desktopSessionAPI) ListProfiles() (string, error) {
 
 // Tail bastion_tail：某条会话屏幕上最后几行
 func (desktopSessionAPI) Tail(terminal string, lines int) (string, error) {
-	s, errMsg := lookupSession(terminal)
+	s, errMsg := lookupSession(terminal, "read")
 	if errMsg != "" {
 		return errMsg, nil
 	}
@@ -134,7 +200,7 @@ func (desktopSessionAPI) Exec(command, terminal string) (string, error) {
 	if cmd == "" {
 		return "错误：bastion_exec 需要 command 参数（要执行的命令）", nil
 	}
-	s, errMsg := lookupSession(terminal)
+	s, errMsg := lookupSession(terminal, "write")
 	if errMsg != "" {
 		return errMsg, nil
 	}
@@ -184,7 +250,7 @@ func (desktopSessionAPI) Push(localPath, remoteDir, terminal string) (string, er
 	if _, err := os.Stat(localPath); err != nil {
 		return "错误：本机找不到这个路径：" + localPath, nil
 	}
-	s, errMsg := lookupSession(terminal)
+	s, errMsg := lookupSession(terminal, "write")
 	if errMsg != "" {
 		return errMsg, nil
 	}
@@ -204,7 +270,7 @@ func (desktopSessionAPI) Pull(remotePath, localDir, terminal string) (string, er
 	if remotePath == "" {
 		return "错误：bastion_pull 需要 remotePath（远端文件路径）", nil
 	}
-	s, errMsg := lookupSession(terminal)
+	s, errMsg := lookupSession(terminal, "write")
 	if errMsg != "" {
 		return errMsg, nil
 	}

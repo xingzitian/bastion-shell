@@ -103,6 +103,14 @@
     } else {
       pw = req.password || '';
     }
+    // ⚠️ 没有可用凭据就别把请求发出去：空密码会让 SSH 客户端"一个认证方式都没有"，
+    // 服务端回一句 no supported methods remain —— 用户看不懂，也不知道该干什么
+    // （2026-09-16 维护者报：密码在服务器上改过之后，桌面版只给这个报错）。
+    if (!pw && !(req.authMethod === 'key' && req.privateKeyPath)) {
+      var hint = '这个档案还没有可用的密码或私钥 —— 请在这里输入一次密码（可以勾选"保存到本机"）。';
+      emit('connectionStatus', { connectionId: connId, status: 'error', message: hint });
+      return { ok: false, message: hint };
+    }
     if (req.savePassword && pw) {
       await setPassword(profile.id, pw);
     }

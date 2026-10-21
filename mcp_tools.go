@@ -23,6 +23,7 @@ import (
 // mcpSessionAPI 工具层需要的能力
 type mcpSessionAPI interface {
 	ListSessions() (string, error)
+	Use(session, alias string, unbind bool) (string, error)
 	Health() (string, error)
 	ListProfiles() (string, error)
 	Tail(terminal string, lines int) (string, error)
@@ -100,6 +101,9 @@ const mcpPullDesc = "把一个**远端文件**拉回本机（`sz`；目标机没
 	"拉回来的文件默认落在本机的下载目录（`~/Downloads/BastionShell`），这样你（AI）可以直接用自己的文件工具读它；" +
 	"想放别处就传 `localDir`。"
 
+const mcpUseDesc = "把**你自己**绑定到某条会话（别名 A/B…）。绑定存在服务端（与 VS Code 扩展共用 ~/.bastionshell/mcp-bindings.json），" +
+	"上下文被压缩也不会丢。要同时操作两台机器：各连一次（自动绑成 A、B），之后 exec 传 session。绑定多于一条时 exec/push/pull **必须**指定 —— 不会替你猜。"
+
 const mcpHealthDesc = "BastionShell MCP 端点自检：返回端点地址/端口、程序版本、工具个数、每条会话的状态、" +
 	"共享规则文件的读取情况。" +
 	"**当其它 bastion_* 工具调用失败时先调它**：\n" +
@@ -121,6 +125,22 @@ var mcpToolDefs = []mcpToolDef{
 		Description: mcpHealthDesc,
 		ReadOnly:    true,
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
+	},
+	{
+		Name:        "bastion_use",
+		Title:       "绑定会话（记住我在哪条会话上）",
+		Description: mcpUseDesc,
+		ReadOnly:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session": map[string]any{"type": "string", "description": "会话 id（如 s-7f3a）或终端名的一部分（必须唯一命中）"},
+				"as":      map[string]any{"type": "string", "description": "别名（默认自动取 A/B/…）"},
+				"unbind":  map[string]any{"type": "boolean", "description": "true = 解绑"},
+			},
+			"required":             []string{"session"},
+			"additionalProperties": false,
+		},
 	},
 	{
 		Name:        "bastion_tail",
@@ -269,6 +289,9 @@ func mcpDispatch(api mcpSessionAPI, name string, args map[string]any) (mcpToolRe
 			}
 		}
 		return call(api.Tail(str("terminal"), lines))
+	case "bastion_use":
+		unbind, _ := args["unbind"].(bool)
+		return call(api.Use(str("session"), str("as"), unbind))
 	case "bastion_exec":
 		command := str("command")
 		if len(command) == 0 || strings.TrimSpace(command) == "" {
