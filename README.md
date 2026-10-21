@@ -29,7 +29,7 @@ BastionShell 的 Wails 壳：Go 后端 + 内嵌 React 前端，打包成 Windows
 
 | 能力 | 现状 |
 |---|---|
-| **MCP 出口** | ✅ 有端点（默认 `http://127.0.0.1:39311/mcp`），8 个工具 + Bearer token + 端口占用自动退让 |
+| **MCP 出口** | ✅ 有端点（默认 `http://127.0.0.1:39311/mcp`），12 个工具（含 `bastion_wait`/`bastion_job`/`bastion_cancel`）+ Bearer token + 端口占用自动退让 |
 | **命令执行引擎**（哨兵 + 退出码 + 输出静止兜底） | ✅ 有；AI 的 `bastion_exec` 就建在它上面 |
 | **会话登记表 + 屏幕快照** | ✅ 有；`bastion_listSessions` / `bastion_tail` 用它 |
 | **AI 传文件** | ✅ 有（`bastion_push` / `bastion_pull`）：能力探测 + 无 lrzsz 自动降级 base64 + 目录 tar 打包 + 传完回读校验 |
