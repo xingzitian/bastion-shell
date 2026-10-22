@@ -331,3 +331,15 @@ func parseIntArg(v any) int64 {
 	}
 	return 0
 }
+
+// clientSupportsElicitation 客户端有没有声明 elicitation 能力。
+//
+// 没声明却给 resultType:"input_required"，客户端会抛 "no handler for elicitation/create"，
+// 作业就卡在 input_required 占着会话。没声明时退化成普通结果（status 仍是 input_required）。
+func clientSupportsElicitation(m requestMeta) bool {
+	if m.ClientCaps == nil {
+		return false
+	}
+	_, ok := m.ClientCaps["elicitation"]
+	return ok
+}
