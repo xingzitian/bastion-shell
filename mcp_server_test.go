@@ -55,6 +55,11 @@ func (f *fakeAPI) Job(jobID string, sinceOffset int64, maxBytes int) (string, er
 func (f *fakeAPI) Cancel(jobID string) (string, error) {
 	return "已取消 " + jobID, f.err
 }
+
+func (f *fakeAPI) ResumeTask(jobID string, responses any) (string, error) {
+	return "续跑 " + jobID, f.err
+}
+
 func (f *fakeAPI) Habits(action, profile, habit, privilege string) (string, error) {
 	f.lastAction, f.lastProfile = action, profile
 	return "习惯内容", f.err
@@ -126,12 +131,22 @@ func TestMcpInitializeHandshake(t *testing.T) {
 	}
 }
 
-func TestMcpInitializeFallsBackToLatestProtocol(t *testing.T) {
+func TestMcpInitializeRejectsUnknownProtocol(t *testing.T) {
+	// 与头路径一致：不认识的版本 → -32022（不再静默降级）
 	srv, _ := newTestMcpServer(t)
-	_, body := rpc(t, srv, testToken, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}`)
+	resp, body := rpc(t, srv, testToken, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}`)
+	errObj, _ := body["error"].(map[string]any)
+	if errObj == nil || int(errObj["code"].(float64)) != errUnsupported {
+		t.Fatalf("应该回 -32022，得到 %v（HTTP %v）", body, resp)
+	}
+}
+
+func TestMcpInitializeAcceptsKnownProtocol(t *testing.T) {
+	srv, _ := newTestMcpServer(t)
+	_, body := rpc(t, srv, testToken, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`)
 	res, _ := body["result"].(map[string]any)
-	if res["protocolVersion"] != latestProtocolVersion {
-		t.Fatalf("不认识的版本应该回最新的，得到 %v", res["protocolVersion"])
+	if res["protocolVersion"] != "2025-06-18" {
+		t.Fatalf("认识的版本应该原样回声，得到 %v", res["protocolVersion"])
 	}
 }
 

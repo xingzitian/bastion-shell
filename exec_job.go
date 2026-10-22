@@ -10,6 +10,8 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"sync"
@@ -53,6 +55,10 @@ type execJob struct {
 	quietMs      int64
 	lastOutputAt time.Time
 	scanTail     string
+	// logFile / logPath：本机日志（重启后还能读）。
+	// 远端 tee 在堡垒机场景不可行（SSH 连的是堡垒机，命令跑在目标机，SFTP 读不到目标机的 /tmp）。
+	logFile *os.File
+	logPath string
 
 	mu      sync.Mutex
 	waiters []chan struct{}
@@ -70,6 +76,7 @@ type jobView struct {
 	Prompt      string     `json:"prompt,omitempty"`
 	Hint        string     `json:"hint,omitempty"`
 	Reason      string     `json:"reason,omitempty"`
+	LogPath     string     `json:"logPath,omitempty"`
 }
 
 var (
@@ -99,12 +106,40 @@ func createJob(sessionID string, cursorAtStart int64, command string) *execJob {
 		quietMs:      15000,
 		lastOutputAt: time.Now(),
 	}
+	// 本机日志：落 <配置目录>/job-logs/job-<id>.log；落盘失败不影响作业
+	if dir, err := jobLogDir(); err == nil {
+		p := filepath.Join(dir, "job-"+j.id+".log")
+		if f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			j.logFile = f
+			j.logPath = p
+		}
+	}
 	jobsMu.Lock()
 	jobs[j.id] = j
 	jobOrder = append(jobOrder, j.id)
 	activeJobBySession[sessionID] = j.id
 	jobsMu.Unlock()
 	return j
+}
+
+// jobLogDir 作业日志目录（桌面版自己的配置目录下）
+func jobLogDir() (string, error) {
+	dir := filepath.Join(bastionConfigDir(), "job-logs")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// closeLog 终态时关掉日志文件（内容已落盘）
+func (j *execJob) closeLog() {
+	j.mu.Lock()
+	f := j.logFile
+	j.logFile = nil
+	j.mu.Unlock()
+	if f != nil {
+		_ = f.Close()
+	}
 }
 
 func getJob(id string) *execJob {
@@ -140,6 +175,9 @@ func (j *execJob) appendOutput(b []byte) {
 	}
 	j.mu.Lock()
 	j.buf.Write(b)
+	if j.logFile != nil {
+		_, _ = j.logFile.Write(b)
+	}
 	if j.buf.Len() > jobBufferMax {
 		drop := j.buf.Len() - jobBufferMax
 		j.buf.Next(drop)
@@ -261,6 +299,8 @@ func (j *execJob) complete(exitCode int, hasExit bool, markerSeen bool) {
 	id := j.id
 	j.mu.Unlock()
 	clearActive(sessionID, id)
+	j.closeLog()
+	emitJobEvent(j)
 	j.wake()
 }
 
@@ -297,6 +337,8 @@ func (j *execJob) cancel() {
 	sessionID, id := j.sessionID, j.id
 	j.mu.Unlock()
 	clearActive(sessionID, id)
+	j.closeLog()
+	emitJobEvent(j)
 	j.wake()
 }
 
@@ -311,6 +353,8 @@ func (j *execJob) fail(reason string) {
 	sessionID, id := j.sessionID, j.id
 	j.mu.Unlock()
 	clearActive(sessionID, id)
+	j.closeLog()
+	emitJobEvent(j)
 	j.wake()
 }
 
@@ -337,6 +381,7 @@ func (j *execJob) view(cursorNow int64) jobView {
 		Prompt:      j.prompt,
 		Hint:        j.hint,
 		Reason:      j.reason,
+		LogPath:     j.logPath,
 	}
 }
 
@@ -525,4 +570,52 @@ func snapshotJobs() []*execJob {
 // completeQuiet 静默兜底完成（没看到哨兵，但提示符已回）
 func (j *execJob) completeQuiet() {
 	j.complete(0, false, false)
+}
+
+// ── 作业事件（subscriptions/listen 的 notifications/tasks 数据源）──
+
+type jobEvent struct {
+	JobID    string
+	Status   string
+	ExitCode int
+	Reason   string
+}
+
+var jobSubs = struct {
+	sync.Mutex
+	m map[chan jobEvent]struct{}
+}{m: map[chan jobEvent]struct{}{}}
+
+// subscribeJobEvents 订阅作业状态变化（返回通道与取消函数；通道**不关闭**，避免发送方 panic）
+func subscribeJobEvents() (<-chan jobEvent, func()) {
+	ch := make(chan jobEvent, 16)
+	jobSubs.Lock()
+	jobSubs.m[ch] = struct{}{}
+	jobSubs.Unlock()
+	return ch, func() {
+		jobSubs.Lock()
+		delete(jobSubs.m, ch)
+		jobSubs.Unlock()
+	}
+}
+
+// emitJobEvent 广播一次作业状态（状态机在变化时调用）
+func emitJobEvent(j *execJob) {
+	jobSubs.Lock()
+	subs := make([]chan jobEvent, 0, len(jobSubs.m))
+	for c := range jobSubs.m {
+		subs = append(subs, c)
+	}
+	jobSubs.Unlock()
+	if len(subs) == 0 {
+		return
+	}
+	v := j.view(0)
+	e := jobEvent{JobID: j.id, Status: string(v.Status), ExitCode: v.ExitCode, Reason: v.Reason}
+	for _, c := range subs {
+		select {
+		case c <- e:
+		default: // 订阅者不读就丢，别把状态机堵住
+		}
+	}
 }

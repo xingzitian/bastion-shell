@@ -403,6 +403,10 @@ func (desktopSessionAPI) Job(jobID string, sinceOffset int64, maxBytes int) (str
 	view := job.view(0)
 	head := fmt.Sprintf("作业 %s｜状态 %s｜退出码 %d｜共 %d 字节｜本次 [%d, %d)",
 		job.id, view.Status, view.ExitCode, job.endOffset(), from, next)
+	if view.LogPath != "" {
+		// 本机日志：桌面版没有远端 tee（堡垒机场景读不到目标机 /tmp），但落本机文件同样"重启后还能读"
+		head += fmt.Sprintf("｜本机日志 %s", view.LogPath)
+	}
 	text := head + "\n\n" + orEmpty(chunk, "（这一段没有内容）")
 	if truncated {
 		text += fmt.Sprintf("\n\n[还有更多：下次传 sinceOffset=%d]", next)
@@ -617,4 +621,45 @@ func looksLikePasswordPrompt(command, output string) bool {
 		return false
 	}
 	return rePasswordPrompt.MatchString(lines[len(lines)-1])
+}
+
+// ResumeTask MRTR 第二步：把客户端交上来的输入写回会话并续跑。
+//
+// 安全红线：密码 / 动态码 / 口令类提示**不代填** —— 客户端把值传上来也不写进终端，
+// 而是让用户自己在终端里输入（同一条会话）。
+func (desktopSessionAPI) ResumeTask(jobID string, responses any) (string, error) {
+	job := getJob(jobID)
+	if job == nil {
+		return fmt.Sprintf("找不到任务「%s」（作业只在本次 BastionShell 运行期间有效）。", jobID), nil
+	}
+	v := job.view(sessionCursor(job.sessionID))
+	if v.Status != statusInputRequired {
+		return fmt.Sprintf("作业 %s 现在不在等输入（状态 %s），不用再提交。", job.id, v.Status), nil
+	}
+	promptText := strings.TrimSpace(v.Prompt + " " + v.Hint)
+	if isSecretPrompt(promptText) {
+		return fmt.Sprintf("这个提示是**凭据类**（%s），不会代填。\n请让用户直接在终端里输入（同一条会话），之后用 bastion_wait({jobId:%q}) 接着等。", v.Prompt, job.id), nil
+	}
+	value := firstInputValue(responses)
+	if value == "" {
+		return "inputResponses 里没有可用的值（形如 {\"prompt\":{\"action\":\"accept\",\"content\":\"y\"}}）。", nil
+	}
+	s := sessionByID(job.sessionID)
+	if s == nil {
+		job.fail("session_lost")
+		return fmt.Sprintf("作业 %s 所在的会话已经关闭了。", job.id), nil
+	}
+	if _, err := s.stdin.Write([]byte(strings.ReplaceAll(value, "\n", "") + "\r")); err != nil {
+		return fmt.Sprintf("写入会话失败：%v", err), nil
+	}
+	job.resume()
+	after := job.waitFor("", 5000, 0, func() int64 { return sessionCursor(job.sessionID) })
+	switch after.Status {
+	case statusCompleted:
+		return fmt.Sprintf("已提交输入，作业 %s 已完成（退出码 %d）。", job.id, after.ExitCode), nil
+	case statusWorking:
+		return fmt.Sprintf("已提交输入，作业 %s 继续在跑（已 %d 秒）—— 用 bastion_wait 接着等。", job.id, after.ElapsedMs/1000), nil
+	default:
+		return fmt.Sprintf("已提交输入，当前状态：%s（%s）。", after.Status, after.Reason), nil
+	}
 }

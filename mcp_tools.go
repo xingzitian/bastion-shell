@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,6 +29,8 @@ type mcpSessionAPI interface {
 	Wait(jobID, pattern string, waitMs, sinceOffset int64) (string, error)
 	Job(jobID string, sinceOffset int64, maxBytes int) (string, error)
 	Cancel(jobID string) (string, error)
+	// ResumeTask：MRTR 第二步 —— 把客户端交上来的输入写回会话，续跑等输入的任务
+	ResumeTask(jobID string, responses any) (string, error)
 	Health() (string, error)
 	ListProfiles() (string, error)
 	Tail(terminal string, lines int) (string, error)
@@ -54,6 +57,34 @@ type mcpToolDef struct {
 type mcpToolResult struct {
 	Text    string
 	IsError bool
+	// exec 族带回来的作业信息（Tasks/MRTR 要用）
+	JobID     string
+	JobStatus string
+}
+
+// withJobInfo 跑完 exec 之后把作业信息补到结果上（Tasks/MRTR 需要）
+func withJobInfo(r mcpToolResult, err error) (mcpToolResult, error) {
+	if err == nil {
+		r.JobID, r.JobStatus = extractJobInfo(r.Text)
+	}
+	return r, err
+}
+
+// extractJobInfo 从 exec 返回的 `[job] {json}` 尾巴里取 jobId/status（Tasks 与 MRTR 要用）。
+// 用解析而不是再加一个接口方法：桌面版的 exec 签名保持简单，作业信息本来就是结果的一部分。
+func extractJobInfo(text string) (jobID, status string) {
+	i := strings.LastIndex(text, "[job] ")
+	if i < 0 {
+		return "", ""
+	}
+	var v struct {
+		JobID  string `json:"jobId"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(text[i+6:])), &v); err != nil {
+		return "", ""
+	}
+	return v.JobID, v.Status
 }
 
 // errUnknownTool 调用了不存在的工具（HTTP 层会翻译成 JSON-RPC -32602）
@@ -369,7 +400,7 @@ func mcpDispatch(api mcpSessionAPI, name string, args map[string]any) (mcpToolRe
 		if len(command) == 0 || strings.TrimSpace(command) == "" {
 			return mcpToolResult{Text: "错误：bastion_exec 需要 command 参数（要执行的命令）", IsError: true}, nil
 		}
-		return call(api.Exec(execArgs{
+		return withJobInfo(call(api.Exec(execArgs{
 			Command:    command,
 			Session:    str("session"),
 			Terminal:   str("terminal"),
@@ -378,7 +409,7 @@ func mcpDispatch(api mcpSessionAPI, name string, args map[string]any) (mcpToolRe
 			Mode:       str("mode"),
 			Background: boolArg(args["background"]),
 			Force:      boolArg(args["force"]),
-		}))
+		})))
 	case "bastion_wait":
 		return call(api.Wait(str("jobId"), str("pattern"), intArg(args["waitMs"]), intArg(args["sinceOffset"])))
 	case "bastion_job":
