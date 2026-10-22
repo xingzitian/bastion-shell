@@ -51,6 +51,8 @@ type mcpToolDef struct {
 	// ReadOnly 只读工具：MCP 客户端据此**不弹确认框**（`readOnlyHint`）。
 	// 有副作用的工具绝不能标成只读。
 	ReadOnly bool
+	// OutputSchema JSON Schema（结构化返回值）；声明了就必须让 structuredContent 符合它
+	OutputSchema map[string]any
 }
 
 // mcpToolResult 一次工具调用的结果
@@ -211,10 +213,11 @@ var mcpToolDefs = []mcpToolDef{
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 	},
 	{
-		Name:        "bastion_exec",
-		Title:       "在远端执行命令",
-		Description: mcpExecDesc,
-		ReadOnly:    false,
+		Name:         "bastion_exec",
+		Title:        "在远端执行命令",
+		Description:  mcpExecDesc,
+		ReadOnly:     false,
+		OutputSchema: execOutputSchema(),
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -238,10 +241,11 @@ var mcpToolDefs = []mcpToolDef{
 		},
 	},
 	{
-		Name:        "bastion_wait",
-		Title:       "等作业（完成 / 等某个输出出现）",
-		Description: mcpWaitDesc,
-		ReadOnly:    true,
+		Name:         "bastion_wait",
+		Title:        "等作业（完成 / 等某个输出出现）",
+		Description:  mcpWaitDesc,
+		ReadOnly:     true,
+		OutputSchema: waitOutputSchema(),
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -255,10 +259,11 @@ var mcpToolDefs = []mcpToolDef{
 		},
 	},
 	{
-		Name:        "bastion_job",
-		Title:       "读作业日志（增量）",
-		Description: mcpJobDesc,
-		ReadOnly:    true,
+		Name:         "bastion_job",
+		Title:        "读作业日志（增量）",
+		Description:  mcpJobDesc,
+		ReadOnly:     true,
+		OutputSchema: jobOutputSchema(),
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -271,10 +276,11 @@ var mcpToolDefs = []mcpToolDef{
 		},
 	},
 	{
-		Name:        "bastion_cancel",
-		Title:       "取消作业",
-		Description: mcpCancelDesc,
-		ReadOnly:    false,
+		Name:         "bastion_cancel",
+		Title:        "取消作业",
+		Description:  mcpCancelDesc,
+		ReadOnly:     false,
+		OutputSchema: cancelOutputSchema(),
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -338,11 +344,12 @@ var mcpToolDefs = []mcpToolDef{
 // toMcpTool 内部工具定义 → MCP `tools/list` 里的一条
 func toMcpTool(def mcpToolDef) map[string]any {
 	return map[string]any{
-		"name":        def.Name,
-		"title":       def.Title,
-		"description": def.Description,
-		"inputSchema": def.InputSchema,
-		"annotations": map[string]any{"title": def.Title, "readOnlyHint": def.ReadOnly},
+		"name":         def.Name,
+		"title":        def.Title,
+		"description":  def.Description,
+		"inputSchema":  def.InputSchema,
+		"outputSchema": def.OutputSchema,
+		"annotations":  map[string]any{"title": def.Title, "readOnlyHint": def.ReadOnly},
 	}
 }
 
