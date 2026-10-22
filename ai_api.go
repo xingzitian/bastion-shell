@@ -252,11 +252,18 @@ func (desktopSessionAPI) Exec(args execArgs) (string, error) {
 
 	// interactive：只发不等（top / vi / sudo -i / 菜单）
 	if args.Mode == "interactive" {
+		// 也要建作业：否则返回里没有 jobId，AI 既不能 cancel 也没法跟进
+		ijob := createJob(s.id, s.cursor.Load(), cmd)
+		startJobWatcher()
 		if err := s.writeCommand(cmd); err != nil {
+			ijob.fail("exec_error")
 			return fmt.Sprintf("执行失败（会话 %s）：%v", labels[s.id], err), nil
 		}
+		s.activeJob = ijob
 		return fmt.Sprintf("已发出（interactive 模式：只发不等）：%s\n"+
-			"这类命令会占着终端，拿不到可靠输出。用 bastion_tail 看屏幕现状；人工接手也走同一条会话。", cmd), nil
+			"这类命令会占着终端，拿不到可靠输出。用 bastion_tail 看屏幕现状；"+
+			"要停掉用 bastion_cancel({jobId:%q})；人工接手也走同一条会话。\n\n[job] {\"jobId\":%q,\"status\":\"working\"}",
+			cmd, ijob.id, ijob.id), nil
 	}
 
 	quietMs := args.QuietMs
@@ -329,9 +336,10 @@ func statusLine(v jobView) string {
 	case statusFailed:
 		return fmt.Sprintf("\n\n[退出码 %d：命令以非 0 退出，通常表示失败 —— 结合输出判断原因]", v.ExitCode)
 	}
+	// 有退出码就信退出码：markerSeen=false 只说明"不是靠哨兵判的"，不代表没有退出码
+	// （压测里 `true` 出现过结构化 0、文字写"未知" —— 文字会误导 AI）
 	if !v.MarkerSeen {
-		return "\n\n[退出码未知：没拿到结束标记（输出静止就返回了）。上面的输出可能不完整 —— " +
-			"用 bastion_tail 看屏幕现状，或 bastion_job 读完整日志]"
+		return "\n\n[退出码 0：命令成功（靠「静默 + 提示符已回」判定，没走哨兵）]"
 	}
 	return fmt.Sprintf("\n\n[退出码 %d：命令成功]", v.ExitCode)
 }

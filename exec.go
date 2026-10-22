@@ -78,25 +78,33 @@ func newMarker() string {
 // 行格式：`<marker>:<rc>`（老版本是裸 `<marker>`，这里也兼容）。
 // 只有「单独一行」才算命中 —— 命令回显里那串 `; echo __MARKER__:$ec` 不算，
 // 否则命令一回显就被当成执行完了。
+// readMarkerLine 在输出里找哨兵。
+//
+// **不要求行首**：真机上哨兵那行前面常残留 ANSI 或提示符刷新，用"整行 equals/startsWith"
+// 会漏判 —— 表现就是"命令跑完了却报退出码未知"（0.3.10 压测实测）。
+// 回显里的 `echo <marker>:$ec` 是字面量（没有数字），所以要求 `:<数字>` 能排除它。
 func readMarkerLine(s, marker string) (bool, *int) {
 	if marker == "" {
 		return false, nil
 	}
 	plain := stripAnsi(s)
-	for _, line := range strings.Split(plain, "\n") {
-		t := strings.TrimSpace(line)
-		if t == marker {
-			return true, nil
-		}
-		if strings.HasPrefix(t, marker+":") {
-			rc, err := strconv.Atoi(strings.TrimSpace(t[len(marker)+1:]))
-			if err != nil {
-				return true, nil
-			}
-			return true, &rc
-		}
+	idx := strings.LastIndex(plain, marker+":")
+	if idx < 0 {
+		return false, nil
 	}
-	return false, nil
+	rest := plain[idx+len(marker)+1:]
+	digits := 0
+	for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 {
+		return false, nil
+	}
+	rc, err := strconv.Atoi(rest[:digits])
+	if err != nil {
+		return false, nil
+	}
+	return true, &rc
 }
 
 // stripMarker 从返回给 AI 的输出里剔除哨兵相关行。
