@@ -47,7 +47,17 @@ func main() {
 		}
 	}()
 
+	// headless：只跑后端 + MCP，不开窗口。
+	// 用途：① 没有桌面环境时验证 HTTP/薄壳路由；② 将来桌面壳崩溃时的排障入口。
+	// 开关：BASTIONSHELL_HEADLESS=1
+	if os.Getenv("BASTIONSHELL_HEADLESS") == "1" {
+		log.Printf("headless 模式：后端 %d + MCP 已启动，不开窗口（Ctrl-C 退出）", 18090)
+		select {}
+	}
+
 	app := NewApp()
+	// 退出时把 CLI 薄壳子进程收掉（别留孤儿 node）
+	defer stopCliShell()
 	err := wails.Run(&options.App{
 		Title:            "BastionShell",
 		Width:            1200,

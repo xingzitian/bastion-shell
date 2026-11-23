@@ -137,6 +137,7 @@ func serveBackend(port int) error {
 	registerSecretRoutes(mux, newSecretStore())
 	registerAiAccessRoutes(mux)
 	registerMcpInfoRoute(mux)
+	registerCliShellRoutes(mux) // B 阶段：CLI 薄壳（GET /api/shell/cli?profile=…）
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	log.Printf("后端服务已启动: http://%s", addr)
 	return http.ListenAndServe(addr, corsMiddleware(mux))
