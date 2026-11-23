@@ -150,7 +150,7 @@ func cliMcpPort() string {
 }
 
 // startCliShell 起 CLI 宿主并等到网页终端地址（最多 40s）。
-func startCliShell(profiles []string) (string, error) {
+func startCliShell(profiles []string, passwords map[string]string) (string, error) {
 	theCliShell.mu.Lock()
 	defer theCliShell.mu.Unlock()
 
@@ -169,14 +169,28 @@ func startCliShell(profiles []string) (string, error) {
 	if mf := legacyMcpFile(); mf != "" {
 		args = append(args, "--mcp-file", mf, "--port", cliMcpPort())
 	}
+	args = append(args, "--passwords-stdin")
 	cmd := exec.Command("node", args...)
 	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return "", err
 	}
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("起 node 失败：%w（需要 Node ≥ 22 在 PATH 里）", err)
 	}
+	// 密码走 stdin（不进 argv：进程列表里能看到 argv）
+	go func() {
+		defer stdin.Close()
+		if len(passwords) == 0 {
+			return
+		}
+		b, _ := json.Marshal(passwords)
+		_, _ = stdin.Write(b)
+	}()
 
 	urlCh := make(chan string, 1)
 	epCh := make(chan *cliEndpoint, 1)
@@ -369,7 +383,7 @@ func registerCliShellRoutes(mux *http.ServeMux) {
 			http.Error(w, "需要 ?profile=<档案名> 或 ?profiles=a,b,c", http.StatusBadRequest)
 			return
 		}
-		url, err := startCliShell(profiles)
+		url, err := startCliShell(profiles, nil)
 		if err != nil {
 			w.Header().Set("content-type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusBadGateway) // 502：壳子起不来，别让客户端以为是 200
@@ -401,6 +415,48 @@ func registerCliShellRoutes(mux *http.ServeMux) {
 			"actualPort": ep.ActualPort,
 			"writeError": werr, // 非空 = 宿主没写成 mcp.json（见 /api/shell/fs-probe）
 		})
+	})
+
+	// POST /api/shell/cli：带密码启动会话组（桌面用；密码只走子进程 stdin，不落盘）
+	mux.HandleFunc("/api/shell/cli/start", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "只接受 POST", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Profiles []struct {
+				Name     string `json:"name"`
+				Password string `json:"password"`
+			} `json:"profiles"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+			http.Error(w, "请求体不是合法 JSON", http.StatusBadRequest)
+			return
+		}
+		var names []string
+		passwords := map[string]string{}
+		for _, p := range body.Profiles {
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				continue
+			}
+			names = append(names, name)
+			if p.Password != "" {
+				passwords[name] = p.Password
+			}
+		}
+		if len(names) == 0 {
+			http.Error(w, "需要至少一个档案", http.StatusBadRequest)
+			return
+		}
+		url, err := startCliShell(names, passwords)
+		w.Header().Set("content-type", "application/json; charset=utf-8")
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"url": url})
 	})
 
 	mux.HandleFunc("/api/shell/cli/stop", func(w http.ResponseWriter, r *http.Request) {

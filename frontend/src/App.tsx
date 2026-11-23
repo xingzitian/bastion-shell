@@ -80,6 +80,7 @@ export default function App() {
   const [showAiAccess, setShowAiAccess] = useState(false)
   // B2：CLI 薄壳（web 终端）当前打开的档案名；null = 未打开
   const [cliShellProfiles, setCliShellProfiles] = useState<string[] | null>(null)
+  const [cliShellUrl, setCliShellUrl] = useState<string | null>(null)
   const [showCliGroup, setShowCliGroup] = useState(false)
   const [aiAccess, setAiAccess] = useState<AiAccess | null>(null)
 
@@ -680,7 +681,7 @@ export default function App() {
               <button
                 className="icon-btn"
                 title="用 CLI 宿主打开（网页终端，beta）"
-                onClick={() => setCliShellProfiles([p.name])}
+                onClick={() => { setCliShellUrl(null); setCliShellProfiles([p.name]) }}
               >
                 ⚡
               </button>
@@ -1075,15 +1076,37 @@ export default function App() {
       </div>
 
       {cliShellProfiles ? (
-        <CliShellView profiles={cliShellProfiles} onClose={() => setCliShellProfiles(null)} />
+        <CliShellView
+          profiles={cliShellProfiles}
+          directUrl={cliShellUrl ?? undefined}
+          onClose={() => {
+            setCliShellProfiles(null)
+            setCliShellUrl(null)
+          }}
+        />
       ) : null}
       {showCliGroup ? (
         <CliGroupDialog
           profiles={profiles}
           onClose={() => setShowCliGroup(false)}
-          onStart={(names) => {
+          onStart={(picked) => {
             setShowCliGroup(false)
-            setCliShellProfiles(names)
+            // 密码经 POST 交给 Go（再由 Go 走 stdin 给 CLI 子进程），拿到 termUrl 后直接装进 iframe
+            void fetch('http://127.0.0.1:18090/api/shell/cli/start', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ profiles: picked })
+            })
+              .then((r) => r.json() as Promise<{ url?: string; error?: string }>)
+              .then((j) => {
+                if (j.url) {
+                  setCliShellUrl(j.url)
+                  setCliShellProfiles(picked.map((p) => p.name))
+                } else {
+                  alert(`会话组启动失败：${j.error ?? '未知原因'}`)
+                }
+              })
+              .catch((e: unknown) => alert(`会话组启动失败：${e instanceof Error ? e.message : String(e)}`))
           }}
         />
       ) : null}
