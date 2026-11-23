@@ -89,8 +89,10 @@ var theCliShell cliShell
 // 旁边就是 `bastion-vscode/out/cli/main.js` —— 这个布局应该开箱即用。
 func cliScriptCandidates(exeDir string) []string {
 	return []string{
-		filepath.Join(exeDir, "bastion-cli", "main.js"),                     // 便携部署
+		filepath.Join(exeDir, "bastion-cli", "main.js"),                     // 便携部署（旧布局）
+		filepath.Join(exeDir, "bastion-cli", "out", "cli", "main.js"),       // 便携部署（npm 包布局，见 tools/make-portable-cli.mjs）
 		filepath.Join(exeDir, "..", "bastion-cli", "main.js"),               // 上一级
+		filepath.Join(exeDir, "..", "bastion-cli", "out", "cli", "main.js"),
 		filepath.Join(exeDir, "..", "..", "bastion-vscode", "out", "cli", "main.js"),
 		filepath.Join(exeDir, "..", "..", "..", "bastion-vscode", "out", "cli", "main.js"),
 		filepath.Join(exeDir, "..", "..", "..", "..", "bastion-vscode", "out", "cli", "main.js"),
