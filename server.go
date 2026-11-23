@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"os"
 	"path/filepath"
 	"sync"
@@ -123,6 +124,19 @@ func releaseConn(connID string) {
 	}
 }
 
+// bastionConfigDir 配置目录（%APPDATA%\bastionshell）。原来在 ai_access.go，随 Go AI 层一起删了，
+// 但 exec_job 记日志还要用。
+func bastionConfigDir() string {
+	if v := strings.TrimSpace(os.Getenv("BASTIONSHELL_CONFIG_DIR")); v != "" {
+		return v
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		return os.TempDir()
+	}
+	return filepath.Join(dir, "bastionshell")
+}
+
 // serveBackend 启动后端服务：/ws 终端通道 + /api 存取接口。
 // 前端静态资源由 Wails 内嵌服务（frontend/dist），不再走这里。
 // 加 CORS：前端从 wails:// 源 fetch http://127.0.0.1:18090/api/... 需要跨域许可。
@@ -135,8 +149,6 @@ func serveBackend(port int) error {
 	registerQuickCommandRoutes(mux)
 	registerDeployRoutes(mux)
 	registerSecretRoutes(mux, newSecretStore())
-	registerAiAccessRoutes(mux)
-	registerMcpInfoRoute(mux)
 	registerCliShellRoutes(mux) // B 阶段：CLI 薄壳（GET /api/shell/cli?profile=…）
 	registerFsProbeRoute(mux)   // 诊断：从应用进程视角看哪些目录可写
 	addr := fmt.Sprintf("127.0.0.1:%d", port)

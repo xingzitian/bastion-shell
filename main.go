@@ -44,16 +44,6 @@ func main() {
 	}()
 	// 启动 MCP 出口：让外部的 AI 客户端能在**用户已经手动登录好的会话**上执行命令。
 	// 独立端口（默认 39311）+ Bearer token，细节见 mcp_register.go。
-	// MCP 由核心界面后端提供（13 工具，含 bastion_connect）；Go 自己那套默认关闭，
-	// 需要临时退回时设 BASTIONSHELL_GO_MCP=1（会另开一个端点，通常不该用）。
-	if os.Getenv("BASTIONSHELL_GO_MCP") == "1" {
-		go func() {
-			if err := startMcpServer(); err != nil {
-				log.Printf("Go MCP 未能启动: %v", err)
-			}
-		}()
-	}
-
 	// 统一核心：界面后端（18090）由 core 提供（隐藏拉起、界面一字不改）；
 	// 起不来就退回 Go 自己那套后端，保证界面还能用。
 	if err := startUiBackend(18090, goBackendPort(), 39311, mcpJsonPath()); err != nil {
