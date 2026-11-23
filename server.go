@@ -138,6 +138,7 @@ func serveBackend(port int) error {
 	registerAiAccessRoutes(mux)
 	registerMcpInfoRoute(mux)
 	registerCliShellRoutes(mux) // B 阶段：CLI 薄壳（GET /api/shell/cli?profile=…）
+	registerFsProbeRoute(mux)   // 诊断：从应用进程视角看哪些目录可写
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	log.Printf("后端服务已启动: http://%s", addr)
 	return http.ListenAndServe(addr, corsMiddleware(mux))

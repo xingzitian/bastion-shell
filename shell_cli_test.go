@@ -3,6 +3,7 @@ package main
 // CLI 薄壳的最小测试：只测**纯函数**与路由契约（不 spawn 真 node，避免测试依赖网络/档案）。
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,5 +101,45 @@ func TestExtractEndpoint(t *testing.T) {
 	}
 	if extractEndpoint("没有端点行") != nil {
 		t.Fatal("不该解析出东西")
+	}
+}
+func TestEndpointRouteBeforeStart(t *testing.T) {
+	mux := http.NewServeMux()
+	registerCliShellRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/endpoint", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("endpoint 应 200，实际 %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"running":false`) {
+		t.Fatalf("启动前应报 running:false，实际：%s", body)
+	}
+}
+
+func TestFsProbeRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	registerFsProbeRoute(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/fs-probe", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fs-probe 应 200，实际 %d", rec.Code)
+	}
+	var rows []struct {
+		Dir   string `json:"dir"`
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("返回不是 JSON：%v（%s）", err, rec.Body.String())
+	}
+	if len(rows) == 0 {
+		t.Fatal("应该至少探测一个目录")
+	}
+	// 至少有一行同时带 dir
+	if rows[0].Dir == "" {
+		t.Fatalf("探测结果缺 dir：%+v", rows[0])
 	}
 }

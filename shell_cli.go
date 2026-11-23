@@ -71,15 +71,35 @@ func extractEndpoint(logText string) *cliEndpoint {
 }
 
 type cliShell struct {
-	mu   sync.Mutex
-	proc *exec.Cmd
-	url  string
-	prof string
+	mu       sync.Mutex
+	proc     *exec.Cmd
+	url      string
+	prof     string
+	endpoint *cliEndpoint
+	writeErr string
 }
 
 var theCliShell cliShell
 
+// cliScriptCandidates 列出所有"CLI 入口可能在哪"的地方（纯函数，便于单测）。
+//
+// 为什么要一串候选：桌面是独立 exe，用户不会去设环境变量。
+// 开发时 exe 在 `bastion-wails/build/bin/`，往上 3 层就是 `shell_tools/`，
+// 旁边就是 `bastion-vscode/out/cli/main.js` —— 这个布局应该开箱即用。
+func cliScriptCandidates(exeDir string) []string {
+	return []string{
+		filepath.Join(exeDir, "bastion-cli", "main.js"),                     // 便携部署
+		filepath.Join(exeDir, "..", "bastion-cli", "main.js"),               // 上一级
+		filepath.Join(exeDir, "..", "..", "bastion-vscode", "out", "cli", "main.js"),
+		filepath.Join(exeDir, "..", "..", "..", "bastion-vscode", "out", "cli", "main.js"),
+		filepath.Join(exeDir, "..", "..", "..", "..", "bastion-vscode", "out", "cli", "main.js"),
+	}
+}
+
 // cliScriptPath 找 CLI 入口（main.js）。
+//
+// 顺序：环境变量 → 候选路径。全都没有时，报错要**列出试过哪些地方** ——
+// 否则用户只会看到"没找到 CLI"，然后来问我们。
 func cliScriptPath() (string, error) {
 	if p := strings.TrimSpace(os.Getenv("BASTIONSHELL_CLI_JS")); p != "" {
 		if _, err := os.Stat(p); err != nil {
@@ -87,16 +107,25 @@ func cliScriptPath() (string, error) {
 		}
 		return p, nil
 	}
-	// 兜底：exe 同目录下的 bastion-cli/main.js（便携部署可以这么摆）
-	if exe, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(exe), "bastion-cli", "main.js")
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("取不到 exe 路径：%w", err)
+	}
+	exeDir := filepath.Dir(exe)
+	tried := cliScriptCandidates(exeDir)
+	for _, cand := range tried {
 		if _, err := os.Stat(cand); err == nil {
+			log.Printf("找到 CLI 入口：%s", cand)
 			return cand, nil
 		}
 	}
-	return "", fmt.Errorf(
-		"没找到 CLI 入口。请设置环境变量 BASTIONSHELL_CLI_JS 指向 <仓库>/out/cli/main.js " +
-			"（或在 exe 同目录放 bastion-cli/main.js）")
+	var b strings.Builder
+	b.WriteString("没找到 CLI 入口（main.js）。试过：\n")
+	for _, cand := range tried {
+		b.WriteString("  - " + cand + "\n")
+	}
+	b.WriteString("解决：设环境变量 BASTIONSHELL_CLI_JS=<仓库>/out/cli/main.js（先 npm run compile）")
+	return "", fmt.Errorf("%s", b.String())
 }
 
 // legacyMcpFile 指向桌面版原来那份 mcp.json —— 让 CLI 接管旧身份，客户端配置不用改。
@@ -220,7 +249,14 @@ func startCliShell(profile string) (string, error) {
 	select {
 	case ep := <-epCh:
 		// 宿主自己写端点文件（子进程写会 EPERM）；token 沿用，老客户端不用改配置
-		writeLegacyEndpoint(ep)
+		if err := writeLegacyEndpoint(ep); err != nil {
+			// 写不进去也要能用：把原因记下来，/api/shell/endpoint 会一并返回
+			log.Printf("端点文件没写成（不影响终端）：%v", err)
+			theCliShell.writeErr = err.Error()
+		} else {
+			theCliShell.writeErr = ""
+		}
+		theCliShell.endpoint = ep
 		u := ep.TermURL
 		if u == "" {
 			u = ep.URL
@@ -261,6 +297,51 @@ func stopCliShell() {
 	stopCliShellLocked()
 }
 
+// registerFsProbeRoute 诊断用：从**应用进程**视角，逐个目录试写一个文件。
+//
+// 为什么需要它：从某些启动上下文（比如代理/沙箱里起 GUI）打开时，应用写
+// %APPDATA% 的新文件会被拒，而同一个 shell 里 pwsh 写同一目录却正常 ——
+// 这条路由能把"到底哪些目录不可写"一次说清，省得靠猜。
+func registerFsProbeRoute(mux *http.ServeMux) {
+	mux.HandleFunc("/api/shell/fs-probe", func(w http.ResponseWriter, r *http.Request) {
+		type result struct {
+			Dir   string `json:"dir"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error,omitempty"`
+		}
+		out := []result{}
+		add := func(dir string) {
+			if dir == "" {
+				return
+			}
+			f := filepath.Join(dir, "bs-fs-probe.txt")
+			err := os.MkdirAll(dir, 0o755)
+			if err == nil {
+				err = os.WriteFile(f, []byte("probe"), 0o644)
+			}
+			res := result{Dir: dir, OK: err == nil}
+			if err != nil {
+				res.Error = err.Error()
+			} else {
+				_ = os.Remove(f)
+			}
+			out = append(out, res)
+		}
+		add(os.TempDir())
+		if dir, err := os.UserConfigDir(); err == nil {
+			add(filepath.Join(dir, "bastionshell"))
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			add(filepath.Join(home, ".bastionshell"))
+		}
+		if exe, err := os.Executable(); err == nil {
+			add(filepath.Dir(exe))
+		}
+		w.Header().Set("content-type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(out)
+	})
+}
+
 // registerCliShellRoutes 挂两条路由：
 //
 //	GET  /api/shell/cli?profile=xzt   → 302 跳到网页终端（浏览器里可直接验证）
@@ -282,6 +363,30 @@ func registerCliShellRoutes(mux *http.ServeMux) {
 		http.Redirect(w, r, url, http.StatusFound)
 	})
 
+	mux.HandleFunc("/api/shell/endpoint", func(w http.ResponseWriter, r *http.Request) {
+		theCliShell.mu.Lock()
+		ep := theCliShell.endpoint
+		werr := theCliShell.writeErr
+		url := theCliShell.url
+		prof := theCliShell.prof
+		theCliShell.mu.Unlock()
+		w.Header().Set("content-type", "application/json; charset=utf-8")
+		if ep == nil {
+			_ = json.NewEncoder(w).Encode(map[string]any{"running": false, "termUrl": url, "profile": prof})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"running":    true,
+			"profile":    prof,
+			"termUrl":    ep.TermURL,
+			"mcpUrl":     ep.URL,
+			"token":      ep.Token,
+			"port":       ep.Port,
+			"actualPort": ep.ActualPort,
+			"writeError": werr, // 非空 = 宿主没写成 mcp.json（见 /api/shell/fs-probe）
+		})
+	})
+
 	mux.HandleFunc("/api/shell/cli/stop", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "只接受 POST", http.StatusMethodNotAllowed)
@@ -297,12 +402,11 @@ func registerCliShellRoutes(mux *http.ServeMux) {
 //
 // 为什么不是 CLI 自己写：桌面 exe spawn 出来的 CLI 写这个文件会 EPERM（父进程上下文差异，
 // 2026-11-23 实测）。宿主写自己的配置目录一直没问题，所以由宿主落盘。
-func writeLegacyEndpoint(ep *cliEndpoint) {
+func writeLegacyEndpoint(ep *cliEndpoint) error {
 	file := legacyMcpFile()
 	log.Printf("[cli] writeLegacyEndpoint: file=%q token=%s…", file, shortToken(ep.Token))
 	if file == "" {
-		log.Printf("[cli] 端点文件路径为空（BASTIONSHELL_CLI_MCP_FILE 未设、UserConfigDir 也取不到）")
-		return
+		return fmt.Errorf("端点文件路径为空（BASTIONSHELL_CLI_MCP_FILE 未设、UserConfigDir 也取不到）")
 	}
 	payload := map[string]any{
 		"url":        ep.URL,
@@ -316,15 +420,14 @@ func writeLegacyEndpoint(ep *cliEndpoint) {
 		payload["note"] = "默认端口被占用，已退到随机端口"
 	}
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		log.Printf("写端点文件失败（建目录）：%v", err)
-		return
+		return fmt.Errorf("建目录失败：%w", err)
 	}
 	b, _ := json.MarshalIndent(payload, "", "  ")
 	if err := os.WriteFile(file, b, 0o644); err != nil {
-		log.Printf("写端点文件失败：%v", err)
-		return
+		return fmt.Errorf("写 %s 失败：%w", file, err)
 	}
 	log.Printf("端点文件已更新（宿主写入）：%s（token 前缀 %s…）", file, shortToken(ep.Token))
+	return nil
 }
 
 func shortToken(t string) string {
