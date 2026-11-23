@@ -176,6 +176,7 @@ func startCliShell(profiles []string, passwords map[string]string) (string, erro
 	}
 	args = append(args, "--passwords-stdin")
 	cmd := exec.Command("node", args...)
+	hideWindow(cmd) // 不弹控制台窗口（用户 2026-11-23 报"窗口一闪而过"）
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return "", err
