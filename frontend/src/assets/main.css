@@ -1885,3 +1885,8 @@ body {
 }
 .cli-shell-bar .link-btn:hover { text-decoration: underline; }
 .cli-shell-warn { color: #d7ba7d; cursor: help; }
+/* 会话组对话框 */
+.cli-group-dialog { max-width: 520px; }
+.cli-group-list { list-style: none; padding: 0; margin: 12px 0; max-height: 280px; overflow: auto; }
+.cli-group-list li { padding: 4px 0; }
+.cli-group-list label { display: flex; gap: 8px; align-items: center; cursor: pointer; }

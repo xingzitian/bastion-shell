@@ -27,7 +27,7 @@ func TestCliShellManual(t *testing.T) {
 	stopCliShell()
 	defer stopCliShell()
 
-	url, err := startCliShell(profile)
+	url, err := startCliShell([]string{profile})
 	if err != nil {
 		t.Fatalf("起 CLI 薄壳失败：%v", err)
 	}

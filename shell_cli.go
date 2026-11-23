@@ -150,12 +150,13 @@ func cliMcpPort() string {
 }
 
 // startCliShell 起 CLI 宿主并等到网页终端地址（最多 40s）。
-func startCliShell(profile string) (string, error) {
+func startCliShell(profiles []string) (string, error) {
 	theCliShell.mu.Lock()
 	defer theCliShell.mu.Unlock()
 
-	if theCliShell.proc != nil && theCliShell.url != "" && theCliShell.prof == profile {
-		return theCliShell.url, nil // 同档案复用，不重复起
+	key := strings.Join(profiles, ",")
+	if theCliShell.proc != nil && theCliShell.url != "" && theCliShell.prof == key {
+		return theCliShell.url, nil // 同一组档案复用，不重复起
 	}
 	stopCliShellLocked()
 
@@ -163,7 +164,8 @@ func startCliShell(profile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	args := []string{js, "serve", profile, "--print-endpoint"}
+	args := append([]string{js, "serve"}, profiles...)
+	args = append(args, "--print-endpoint")
 	if mf := legacyMcpFile(); mf != "" {
 		args = append(args, "--mcp-file", mf, "--port", cliMcpPort())
 	}
@@ -263,12 +265,12 @@ func startCliShell(profile string) (string, error) {
 		}
 		theCliShell.proc = cmd
 		theCliShell.url = u
-		theCliShell.prof = profile
+		theCliShell.prof = key
 		return u, nil
 	case u := <-urlCh:
 		theCliShell.proc = cmd
 		theCliShell.url = u
-		theCliShell.prof = profile
+		theCliShell.prof = key
 		return u, nil
 	case <-exitedCh:
 		return "", fmt.Errorf(
@@ -344,16 +346,30 @@ func registerFsProbeRoute(mux *http.ServeMux) {
 
 // registerCliShellRoutes 挂两条路由：
 //
-//	GET  /api/shell/cli?profile=xzt   → 302 跳到网页终端（浏览器里可直接验证）
-//	POST /api/shell/cli/stop          → 停掉薄壳进程
+//	GET  /api/shell/cli?profile=xzt         → 302 跳到网页终端（单条）
+//	GET  /api/shell/cli?profiles=xzt,xb     → 302 跳到网页终端（会话组，网页里可切换）
+//	POST /api/shell/cli/stop                → 停掉薄壳进程
 func registerCliShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/shell/cli", func(w http.ResponseWriter, r *http.Request) {
-		profile := r.URL.Query().Get("profile")
-		if profile == "" {
-			http.Error(w, "需要 ?profile=<档案名>", http.StatusBadRequest)
+		q := r.URL.Query()
+		var profiles []string
+		for _, one := range q["profile"] {
+			if s := strings.TrimSpace(one); s != "" {
+				profiles = append(profiles, s)
+			}
+		}
+		if csv := strings.TrimSpace(q.Get("profiles")); csv != "" {
+			for _, one := range strings.Split(csv, ",") {
+				if s := strings.TrimSpace(one); s != "" {
+					profiles = append(profiles, s)
+				}
+			}
+		}
+		if len(profiles) == 0 {
+			http.Error(w, "需要 ?profile=<档案名> 或 ?profiles=a,b,c", http.StatusBadRequest)
 			return
 		}
-		url, err := startCliShell(profile)
+		url, err := startCliShell(profiles)
 		if err != nil {
 			w.Header().Set("content-type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusBadGateway) // 502：壳子起不来，别让客户端以为是 200

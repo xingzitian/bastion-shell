@@ -25,12 +25,16 @@ interface EndpointInfo {
   writeError?: string
 }
 
-export function CliShellView({ profile, onClose }: { profile: string; onClose: () => void }) {
+export function CliShellView({ profiles, onClose }: { profiles: string[]; onClose: () => void }) {
+  const profile = profiles.join('+')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [ep, setEp] = useState<EndpointInfo | null>(null)
   const [copied, setCopied] = useState<'url' | 'json' | null>(null)
-  const url = `${API_BASE}/api/shell/cli?profile=${encodeURIComponent(profile)}`
+  const url =
+    profiles.length === 1
+      ? `${API_BASE}/api/shell/cli?profile=${encodeURIComponent(profiles[0])}`
+      : `${API_BASE}/api/shell/cli?profiles=${encodeURIComponent(profiles.join(','))}`
   const timer = useRef<number | null>(null)
 
   useEffect(() => {

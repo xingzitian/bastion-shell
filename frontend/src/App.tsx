@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CliShellView } from './components/CliShellView'
+import { CliGroupDialog } from './components/CliGroupDialog'
 import type { AuthPromptPayload, ConnectionProfile, DeployTask } from './shared/types'
 import { ConnectDialog, ConnectDialogResult } from './components/ConnectDialog'
 import { AuthPromptDialog } from './components/AuthPromptDialog'
@@ -78,7 +79,8 @@ export default function App() {
   const [showPorts, setShowPorts] = useState<{ connectionId: string; profileId: string } | null>(null)
   const [showAiAccess, setShowAiAccess] = useState(false)
   // B2：CLI 薄壳（web 终端）当前打开的档案名；null = 未打开
-  const [cliShellProfile, setCliShellProfile] = useState<string | null>(null)
+  const [cliShellProfiles, setCliShellProfiles] = useState<string[] | null>(null)
+  const [showCliGroup, setShowCliGroup] = useState(false)
   const [aiAccess, setAiAccess] = useState<AiAccess | null>(null)
 
   /** 打开「AI 访问」：先拉一次数据再显示（解绑后也走它刷新） */
@@ -641,7 +643,13 @@ export default function App() {
             ⇅ 同步
           </button>
         </div>
-          <button className="sidebar-tool-btn" title="AI 访问：权限与绑定（与扩展共用绑定文件）" onClick={() => void openAiAccess()}>
+          <button
+            className="sidebar-tool-btn"
+            title="会话组：多条会话共用一个 MCP 端点（beta）"
+            onClick={() => setShowCliGroup(true)}
+          >
+            🗂 组
+          </button>          <button className="sidebar-tool-btn" title="AI 访问：权限与绑定（与扩展共用绑定文件）" onClick={() => void openAiAccess()}>
             🤖 AI
           </button>
 
@@ -672,7 +680,7 @@ export default function App() {
               <button
                 className="icon-btn"
                 title="用 CLI 宿主打开（网页终端，beta）"
-                onClick={() => setCliShellProfile(p.name)}
+                onClick={() => setCliShellProfiles([p.name])}
               >
                 ⚡
               </button>
@@ -1066,7 +1074,19 @@ export default function App() {
         ))}
       </div>
 
-      {cliShellProfile ? <CliShellView profile={cliShellProfile} onClose={() => setCliShellProfile(null)} /> : null}
+      {cliShellProfiles ? (
+        <CliShellView profiles={cliShellProfiles} onClose={() => setCliShellProfiles(null)} />
+      ) : null}
+      {showCliGroup ? (
+        <CliGroupDialog
+          profiles={profiles}
+          onClose={() => setShowCliGroup(false)}
+          onStart={(names) => {
+            setShowCliGroup(false)
+            setCliShellProfiles(names)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
