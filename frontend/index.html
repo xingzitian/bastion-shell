@@ -8,9 +8,15 @@
       界面通过 ws://127.0.0.1:18090 与 http://127.0.0.1:18090 跟 Go 后端说话，
       不放开 connect-src 的话 WebSocket 会被 CSP 直接拦掉（界面能开、连不上机器）。
     -->
+    <!--
+      frame-src 是给「薄壳」用的：⚡/🗂 会把 CLI 的网页终端（http://127.0.0.1:<端口>/term）
+      装进窗口里的 iframe。不加这条的话 frame-src 会回落到 default-src 'self'，
+      WebView2 直接显示「已阻止此内容。请与网站所有者联系以解决此问题。」
+      （2026-11-23 用户点 ⚡ 就是被这条拦住的）
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss: http: https:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss: http: https:; frame-src 'self' http: https:"
     />
     <title>BastionShell</title>
     <!-- 适配层：把 window.bastion 翻译到 Go 后端。必须在应用 bundle 之前加载 -->
