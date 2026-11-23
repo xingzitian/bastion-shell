@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -166,6 +167,8 @@ func startCliShell(profiles []string, passwords map[string]string) (string, erro
 	}
 	args := append([]string{js, "serve"}, profiles...)
 	args = append(args, "--print-endpoint")
+	// 桌面被强杀时别留孤儿 node（CLI 每 5s 看一眼父进程）
+	args = append(args, "--parent-pid", strconv.Itoa(os.Getpid()))
 	if mf := legacyMcpFile(); mf != "" {
 		args = append(args, "--mcp-file", mf, "--port", cliMcpPort())
 	}
