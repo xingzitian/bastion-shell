@@ -530,12 +530,19 @@ func truncateForLog(s string, n int) string {
 // 这是"统一核心"的第一步：界面继续用 18090 那套 HTTP/WS 协议，但服务方换成 core；
 // 还没迁进 core 的接口（secret/upload/forwards/pick-files/shell）由 core 反向代理给 Go。
 // 隐藏窗口、跟着父进程退出（--parent-pid），用户看不到任何命令行。
-func startUiBackend(corePort, goPort int) error {
+func startUiBackend(corePort, goPort, mcpPort int, mcpFile string) error {
 	js, err := cliScriptPath()
 	if err != nil {
 		return err
 	}
 	args := []string{js, "ui", "--port", strconv.Itoa(corePort), "--proxy", "http://127.0.0.1:" + strconv.Itoa(goPort), "--parent-pid", strconv.Itoa(os.Getpid())}
+	if mcpPort > 0 {
+		args = append(args, "--mcp-port", strconv.Itoa(mcpPort))
+	}
+	if mcpFile != "" {
+		// 不传 --mcp-file：由 Go 解析 --print-endpoint 的端点行并自己写（子进程写可能被拒）
+		args = append(args, "--print-endpoint")
+	}
 	cmd := exec.Command("node", args...)
 	hideWindow(cmd)
 	stderr, _ := cmd.StderrPipe()
@@ -544,10 +551,21 @@ func startUiBackend(corePort, goPort int) error {
 	}
 	go func() {
 		buf := make([]byte, 4096)
+		var acc strings.Builder
 		for {
 			n, e := stderr.Read(buf)
 			if n > 0 {
-				log.Printf("[core-ui] %s", strings.TrimRight(string(buf[:n]), "\r\n"))
+				chunk := string(buf[:n])
+				log.Printf("[core-ui] %s", strings.TrimRight(chunk, "\r\n"))
+				acc.WriteString(chunk)
+				if ep := extractEndpoint(acc.String()); ep != nil {
+					if err := writeLegacyEndpoint(ep); err != nil {
+						log.Printf("写 mcp.json 失败：%v", err)
+					} else {
+						log.Printf("mcp.json 已由 Go 写入（端口 %d）", ep.ActualPort)
+					}
+					acc.Reset()
+				}
 			}
 			if e != nil {
 				return
