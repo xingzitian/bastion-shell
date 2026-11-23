@@ -33,9 +33,7 @@ func initLog() {
 
 func main() {
 	initLog()
-	// Windows 上解压内嵌 lrzsz，启用 zmodem 文件传输
-	initLrzsz()
-	// 启动后端（SSH / 复用 / 转发 / 文件传输 的 HTTP+WS 服务，供前端 shim 连接）
+	// 启动壳后端（只剩 DPAPI 存密码、文件对话框、拉起 core 这类能力，供前端与 core 调用）；
 	// 统一核心：18090 让给「核心界面后端」（core），Go 退到 18091 只处理还没迁走的接口。
 	go func() {
 		if err := serveBackend(goBackendPort()); err != nil {
