@@ -486,6 +486,11 @@ func registerCliShellRoutes(mux *http.ServeMux) {
 // 为什么不是 CLI 自己写：桌面 exe spawn 出来的 CLI 写这个文件会 EPERM（父进程上下文差异，
 // 2026-11-23 实测）。宿主写自己的配置目录一直没问题，所以由宿主落盘。
 func writeLegacyEndpoint(ep *cliEndpoint) error {
+	// port 记"请求的端口"、actualPort 记实际端口（0.9.2 的语义：客户端可能写死 39311）
+	reqPort := ep.Port
+	if uiMcpRequestPort > 0 {
+		reqPort = uiMcpRequestPort
+	}
 	file := legacyMcpFile()
 	log.Printf("[cli] writeLegacyEndpoint: file=%q token=%s…", file, shortToken(ep.Token))
 	if file == "" {
@@ -493,13 +498,13 @@ func writeLegacyEndpoint(ep *cliEndpoint) error {
 	}
 	payload := map[string]any{
 		"url":        ep.URL,
-		"port":       ep.Port,
+		"port":       reqPort,
 		"actualPort": ep.ActualPort,
 		"token":      ep.Token,
 		"updatedAt":  time.Now().Format("2006/01/02 15:04:05"),
 		"host":       "cli",
 	}
-	if ep.Port != 0 && ep.ActualPort != 0 && ep.Port != ep.ActualPort {
+	if reqPort != 0 && ep.ActualPort != 0 && reqPort != ep.ActualPort {
 		payload["note"] = "默认端口被占用，已退到随机端口"
 	}
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
@@ -536,6 +541,7 @@ func startUiBackend(corePort, goPort, mcpPort int, mcpFile string) error {
 		return err
 	}
 	args := []string{js, "ui", "--port", strconv.Itoa(corePort), "--proxy", "http://127.0.0.1:" + strconv.Itoa(goPort), "--parent-pid", strconv.Itoa(os.Getpid())}
+	uiMcpRequestPort = mcpPort
 	if mcpPort > 0 {
 		args = append(args, "--mcp-port", strconv.Itoa(mcpPort))
 	}
@@ -579,3 +585,5 @@ func startUiBackend(corePort, goPort, mcpPort int, mcpFile string) error {
 	log.Printf("核心界面后端已启动：http://127.0.0.1:%d（代理 → Go %d）", corePort, goPort)
 	return nil
 }
+// uiMcpRequestPort 桌面向 core 请求的 MCP 端口（39311）；写 mcp.json 时用它当 port 字段。
+var uiMcpRequestPort int
