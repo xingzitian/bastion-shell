@@ -51,6 +51,20 @@ const quickCommandsHeader = "// ================================================
 
 // ───────────────────────── 转发规则 ─────────────────────────
 
+// forwardRule 本地端口转发规则（字段名与 VS Code 扩展侧一致：共享文件只有一套词汇）。
+//
+// 统一核心之后，真正建监听/forwardOut 的是 core；这里保留类型只为让配置文件
+// （共享的 forwardRules.jsonc）继续可读写——Go 侧只剩「规则的持久化列表」。
+type forwardRule struct {
+	ID         string `json:"id"`
+	LocalHost  string `json:"localHost"`
+	LocalPort  int    `json:"localPort"`
+	RemoteHost string `json:"remoteHost"`
+	RemotePort int    `json:"remotePort"`
+	ProfileID  string `json:"profileId,omitempty"`
+	Label      string `json:"label,omitempty"`
+}
+
 // forwardStore 转发规则持久化（共享文件；运行时状态在前端）
 type forwardStore struct {
 	mu      sync.Mutex

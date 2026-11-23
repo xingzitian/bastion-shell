@@ -33,36 +33,21 @@ func initLog() {
 
 func main() {
 	initLog()
-	// Windows 上解压内嵌 lrzsz，启用 zmodem 文件传输
-	initLrzsz()
-	// 启动后端（SSH / 复用 / 转发 / 文件传输 的 HTTP+WS 服务，供前端 shim 连接）
+	// 启动壳后端（只剩 DPAPI 存密码、文件对话框、拉起 core 这类能力，供前端与 core 调用）；
 	// 统一核心：18090 让给「核心界面后端」（core），Go 退到 18091 只处理还没迁走的接口。
 	go func() {
 		if err := serveBackend(goBackendPort()); err != nil {
 			log.Printf("Go 后端服务异常: %v", err)
 		}
 	}()
-	// 启动 MCP 出口：让外部的 AI 客户端能在**用户已经手动登录好的会话**上执行命令。
-	// 独立端口（默认 39311）+ Bearer token，细节见 mcp_register.go。
-	// MCP 由核心界面后端提供（13 工具，含 bastion_connect）；Go 自己那套默认关闭，
-	// 需要临时退回时设 BASTIONSHELL_GO_MCP=1（会另开一个端点，通常不该用）。
-	if os.Getenv("BASTIONSHELL_GO_MCP") == "1" {
-		go func() {
-			if err := startMcpServer(); err != nil {
-				log.Printf("Go MCP 未能启动: %v", err)
-			}
-		}()
-	}
-
-	// 统一核心：界面后端（18090）由 core 提供（隐藏拉起、界面一字不改）；
-	// 起不来就退回 Go 自己那套后端，保证界面还能用。
+	// 统一核心：MCP 出口（默认 39311 + Bearer token）现在由 core 的界面后端提供，
+	// 端点文件 mcp.json 仍由这里的 startUiBackend 写（子进程写 %APPDATA% 可能被拒）。
+	// 界面后端（18090）同样由 core 提供（隐藏拉起、界面一字不改）。
+	//
+	// 起不来就**如实报错**，不再退回 Go 自己那套：Go 的 /ws 与终端能力在 ⑤ 里已经删了，
+	// 「退回」只会让界面连上一个没有 /ws 的后端 —— 看起来像界面坏了，其实是退路早就没了。
 	if err := startUiBackend(18090, goBackendPort(), 39311, mcpJsonPath()); err != nil {
-		log.Printf("核心界面后端起不来（退回 Go 后端，界面仍可用）：%v", err)
-		go func() {
-			if err2 := serveBackend(18090); err2 != nil {
-				log.Printf("回退后端也起不来: %v", err2)
-			}
-		}()
+		log.Printf("核心界面后端起不来（界面将无法连接；壳后端 %d 仍在）：%v", goBackendPort(), err)
 	}
 
 	// headless：只跑后端 + MCP，不开窗口。
@@ -73,8 +58,9 @@ func main() {
 		select {}
 	}
 	app := NewApp()
-	// 退出时把 CLI 薄壳子进程收掉（别留孤儿 node）
+	// 退出时把 CLI 子进程收掉（别留孤儿 node）：⚡ 那个终端 + 核心界面后端各一个
 	defer stopCliShell()
+	defer stopCoreShell()
 	err := wails.Run(&options.App{
 		Title:            "BastionShell",
 		Width:            1200,
