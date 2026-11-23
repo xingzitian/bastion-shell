@@ -309,6 +309,10 @@ func stopCliShellLocked() {
 	theCliShell.proc = nil
 	theCliShell.url = ""
 	theCliShell.prof = ""
+	// 端点也清掉：`/api/shell/endpoint` 的 running 看的就是它，
+	// 不清的话「停了终端」还会报 running:true（前端按钮状态就骗人）。
+	theCliShell.endpoint = nil
+	theCliShell.writeErr = ""
 	_ = io.Discard // 保持 import（调试时改成 os.Stderr）
 }
 
@@ -578,12 +582,41 @@ func startUiBackend(corePort, goPort, mcpPort int, mcpFile string) error {
 			}
 		}
 	}()
-	theCliShell.mu.Lock()
-	theCliShell.proc = cmd // 复用同一个句柄：退出时 stopCliShell 会收掉
-	theCliShell.prof = "__ui__"
-	theCliShell.mu.Unlock()
+	coreShell.mu.Lock()
+	coreShell.proc = cmd
+	coreShell.mu.Unlock()
 	log.Printf("核心界面后端已启动：http://127.0.0.1:%d（代理 → Go %d）", corePort, goPort)
 	return nil
+}
+
+// coreShell 核心界面后端（`node cli ui`）的句柄。
+//
+// 为什么**不能**和 theCliShell 共用一个句柄：theCliShell 是 ⚡ 那个「按档案起的终端」，
+// startCliShell 每换一组档案都会先 stopCliShellLocked()。共用的话，用户一点 ⚡
+// 就会把正在给界面当后端的 core 杀掉 —— 界面立刻 ECONNRESET（2026-11-23 实测）。
+var coreShell struct {
+	mu   sync.Mutex
+	proc *exec.Cmd
+}
+
+// stopCoreShell 收掉核心界面后端（应用退出时调用）。
+func stopCoreShell() {
+	coreShell.mu.Lock()
+	defer coreShell.mu.Unlock()
+	if coreShell.proc != nil && coreShell.proc.Process != nil {
+		_ = coreShell.proc.Process.Kill()
+	}
+	coreShell.proc = nil
+}
+
+// coreShellPid 核心界面后端的 pid（诊断用；0 = 没起）
+func coreShellPid() int {
+	coreShell.mu.Lock()
+	defer coreShell.mu.Unlock()
+	if coreShell.proc != nil && coreShell.proc.Process != nil {
+		return coreShell.proc.Process.Pid
+	}
+	return 0
 }
 // uiMcpRequestPort 桌面向 core 请求的 MCP 端口（39311）；写 mcp.json 时用它当 port 字段。
 var uiMcpRequestPort int

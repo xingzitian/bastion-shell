@@ -42,6 +42,8 @@ func serveBackend(port int) error {
 	registerForwardRoutes(mux, newForwardStore()) // 转发规则的持久化列表
 	registerQuickCommandRoutes(mux)               // 快捷命令
 	registerSecretRoutes(mux, newSecretStore())   // DPAPI 存密码
+	registerUploadRoutes(mux)                     // 浏览器文件字节 → 本地临时文件（core 要路径）
+	registerPickFilesRoute(mux)                   // 系统「选择文件」对话框
 	registerCliShellRoutes(mux)                   // CLI 薄壳：拉起/停止 core 后端（GET /api/shell/cli?profile=…）
 	registerFsProbeRoute(mux)                     // 诊断：从应用进程视角看哪些目录可写
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
