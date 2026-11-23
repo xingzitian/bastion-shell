@@ -31,10 +31,14 @@ export function CliShellView({ profiles, onClose, directUrl }: { profiles: strin
   const [loading, setLoading] = useState(true)
   const [ep, setEp] = useState<EndpointInfo | null>(null)
   const [copied, setCopied] = useState<'url' | 'json' | null>(null)
-  const url = directUrl ||
+  // ⚠️ 运算符优先级：`directUrl || len===1 ? a : b` 会被解析成 `(directUrl || len===1) ? a : b`，
+  // directUrl 就等于没生效（2026-11-23 读代码时发现）。这里显式分开算。
+  const spawnUrl =
     profiles.length === 1
       ? `${API_BASE}/api/shell/cli?profile=${encodeURIComponent(profiles[0])}`
       : `${API_BASE}/api/shell/cli?profiles=${encodeURIComponent(profiles.join(','))}`
+  /** iframe 用：POST start 已经拿到 termUrl 就直接用，否则走 GET（会 302 到 term） */
+  const url = directUrl ?? spawnUrl
   const timer = useRef<number | null>(null)
 
   useEffect(() => {
@@ -47,8 +51,12 @@ export function CliShellView({ profiles, onClose, directUrl }: { profiles: strin
 
   // 先探一下：后端返回 JSON error 时要显示原因（iframe 里只会是一坨 JSON）。
   // 302 就说明起了，接着轮询端点信息（token 只有 /api/shell/endpoint 有）。
+  //
+  // ⚠️ directUrl 是「POST start 已经起的会话」的 term 地址：这时**不能再打 spawn 路由**，
+  // 否则会（a）重复起一个进程、（b）把 term 页面当成错误 JSON 显示 "起不来：<!DOCTYPE html>"。
   useEffect(() => {
     let cancelled = false
+    let interval: number | undefined
     const poll = (): void => {
       void fetch(`${API_BASE}/api/shell/endpoint`)
         .then((r) => r.json())
@@ -59,13 +67,24 @@ export function CliShellView({ profiles, onClose, directUrl }: { profiles: strin
         })
         .catch(() => undefined)
     }
-    void fetch(url, { redirect: 'manual' })
+
+    if (directUrl) {
+      poll()
+      interval = window.setInterval(poll, 1500)
+      window.setTimeout(() => window.clearInterval(interval), 40000)
+      return () => {
+        cancelled = true
+        if (interval) window.clearInterval(interval)
+      }
+    }
+
+    void fetch(spawnUrl, { redirect: 'manual' })
       .then((r) => {
         if (cancelled) return
         if (r.type === 'opaqueredirect' || r.status === 302) {
           poll()
-          const t = window.setInterval(poll, 1500)
-          window.setTimeout(() => window.clearInterval(t), 40000)
+          interval = window.setInterval(poll, 1500)
+          window.setTimeout(() => window.clearInterval(interval), 40000)
           return
         }
         r.text().then((t) => {
@@ -86,8 +105,9 @@ export function CliShellView({ profiles, onClose, directUrl }: { profiles: strin
       })
     return () => {
       cancelled = true
+      if (interval) window.clearInterval(interval)
     }
-  }, [url])
+  }, [directUrl, spawnUrl])
 
   const copy = async (text: string, kind: 'url' | 'json'): Promise<void> => {
     try {

@@ -402,10 +402,14 @@ func registerCliShellRoutes(mux *http.ServeMux) {
 		werr := theCliShell.writeErr
 		url := theCliShell.url
 		prof := theCliShell.prof
+		childPid := 0
+		if theCliShell.proc != nil && theCliShell.proc.Process != nil {
+			childPid = theCliShell.proc.Process.Pid
+		}
 		theCliShell.mu.Unlock()
 		w.Header().Set("content-type", "application/json; charset=utf-8")
 		if ep == nil {
-			_ = json.NewEncoder(w).Encode(map[string]any{"running": false, "termUrl": url, "profile": prof})
+			_ = json.NewEncoder(w).Encode(map[string]any{"running": false, "termUrl": url, "profile": prof, "pid": childPid})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -417,6 +421,7 @@ func registerCliShellRoutes(mux *http.ServeMux) {
 			"port":       ep.Port,
 			"actualPort": ep.ActualPort,
 			"writeError": werr, // 非空 = 宿主没写成 mcp.json（见 /api/shell/fs-probe）
+			"pid":        childPid, // CLI 子进程 pid：前端/测试用它判断有没有重复 spawn
 		})
 	})
 
