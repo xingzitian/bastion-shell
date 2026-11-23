@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { CliShellView } from './components/CliShellView'
 import type { AuthPromptPayload, ConnectionProfile, DeployTask } from './shared/types'
 import { ConnectDialog, ConnectDialogResult } from './components/ConnectDialog'
 import { AuthPromptDialog } from './components/AuthPromptDialog'
@@ -76,6 +77,8 @@ export default function App() {
   const [showSync, setShowSync] = useState(false)
   const [showPorts, setShowPorts] = useState<{ connectionId: string; profileId: string } | null>(null)
   const [showAiAccess, setShowAiAccess] = useState(false)
+  // B2：CLI 薄壳（web 终端）当前打开的档案名；null = 未打开
+  const [cliShellProfile, setCliShellProfile] = useState<string | null>(null)
   const [aiAccess, setAiAccess] = useState<AiAccess | null>(null)
 
   /** 打开「AI 访问」：先拉一次数据再显示（解绑后也走它刷新） */
@@ -666,6 +669,13 @@ export default function App() {
                   {p.username}@{p.host}:{p.port}
                 </div>
               </div>
+              <button
+                className="icon-btn"
+                title="用 CLI 宿主打开（网页终端，beta）"
+                onClick={() => setCliShellProfile(p.name)}
+              >
+                ⚡
+              </button>
               <button className="icon-btn" title="删除档案" onClick={() => void deleteProfile(p.id)}>
                 ✕
               </button>
@@ -1055,6 +1065,8 @@ export default function App() {
           </div>
         ))}
       </div>
+
+      {cliShellProfile ? <CliShellView profile={cliShellProfile} onClose={() => setCliShellProfile(null)} /> : null}
     </div>
   )
 }
