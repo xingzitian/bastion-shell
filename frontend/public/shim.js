@@ -187,6 +187,21 @@
         } else if (m.type === 'upload:error') {
           var q = pendingUpload[sessionId];
           if (q) { delete pendingUpload[sessionId]; q.reject(new Error(m.message)); emit('zmodemEvent', { sessionId: sessionId, transferId: q.transferId, direction: 'send', type: 'error', message: m.message }); }
+        } else if (m.type === 'zmodem') {
+          // 终端里的 rz/sz：core 的 ZMODEM 控制器在跑，事件直接转给界面的传输面板。
+          // sessionId 用界面自己的 id（core 那边是它自己的 id），否则面板对不上会话。
+          var p = m.payload || {};
+          emit('zmodemEvent', {
+            sessionId: sessionId,
+            transferId: p.transferId || '',
+            direction: p.direction || 'receive',
+            type: p.type || 'info',
+            name: p.name,
+            bytesSent: p.bytesSent,
+            bytesTotal: p.bytesTotal,
+            localPath: p.localPath,
+            message: p.message
+          });
         }
       },
       onClose: function () {

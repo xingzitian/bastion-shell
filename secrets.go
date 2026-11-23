@@ -90,6 +90,24 @@ func (s *secretStore) remove(key string) error {
 	return s.saveLocked()
 }
 
+// all 把所有条目解密出来（key → 明文）。解不开的条目直接跳过：
+// DPAPI 密文换用户/换机器就解不开，那种情况应该"这条没有密码"，而不是让整体失败。
+func (s *secretStore) all() map[string]string {
+	s.mu.Lock()
+	keys := make([]string, 0, len(s.vals))
+	for k := range s.vals {
+		keys = append(keys, k)
+	}
+	s.mu.Unlock()
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		if v, ok := s.get(k); ok && v != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func registerSecretRoutes(mux *http.ServeMux, store *secretStore) {
 	store.load()
 	writeJSON := func(w http.ResponseWriter, code int, v interface{}) {

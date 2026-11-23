@@ -553,11 +553,34 @@ func startUiBackend(corePort, goPort, mcpPort int, mcpFile string) error {
 		// 不传 --mcp-file：由 Go 解析 --print-endpoint 的端点行并自己写（子进程写可能被拒）
 		args = append(args, "--print-endpoint")
 	}
+	// AI 新建连接（bastion_connect）在桌面这条链路上要能真的连：把 DPAPI 里存过的
+	// 档案密码经 **stdin** 传给 core（与 ⚡ 那条 --passwords-stdin 同一套：
+	// 不进 argv、不落盘，只在子进程内存里）。
+	pw := secretPasswordsForProfiles()
+	if len(pw) > 0 {
+		args = append(args, "--passwords-stdin")
+	}
 	cmd := exec.Command("node", args...)
 	hideWindow(cmd)
 	stderr, _ := cmd.StderrPipe()
+	var stdin io.WriteCloser
+	if len(pw) > 0 {
+		var perr error
+		stdin, perr = cmd.StdinPipe()
+		if perr != nil {
+			return fmt.Errorf("取子进程 stdin 失败：%w", perr)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("起核心界面后端失败：%w", err)
+	}
+	if stdin != nil {
+		go func() {
+			defer stdin.Close()
+			b, _ := json.Marshal(pw)
+			_, _ = stdin.Write(b)
+		}()
+		log.Printf("已把 %d 个档案密码经 stdin 交给核心（AI 可 bastion_connect）", len(pw))
 	}
 	go func() {
 		buf := make([]byte, 4096)
@@ -597,6 +620,37 @@ func startUiBackend(corePort, goPort, mcpPort int, mcpFile string) error {
 var coreShell struct {
 	mu   sync.Mutex
 	proc *exec.Cmd
+}
+
+// secretPasswordsForProfiles 取出「共享档案里真实存在」的那些 DPAPI 密码。
+//
+// 为什么要过滤：secrets.json 里可能还有别的键（历史档案、非档案数据）。AI 新建连接只需要
+// 档案密码，没必要把无关的密文解出来塞进子进程。
+func secretPasswordsForProfiles() map[string]string {
+	st := newSecretStore()
+	st.load()
+	all := st.all()
+	if len(all) == 0 {
+		return nil
+	}
+	names := map[string]bool{}
+	ps := newProfileStore()
+	ps.load()
+	for _, p := range ps.snapshot() {
+		if p.Name != "" {
+			names[p.Name] = true
+		}
+	}
+	out := map[string]string{}
+	for k, v := range all {
+		if names[k] && v != "" {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // stopCoreShell 收掉核心界面后端（应用退出时调用）。
