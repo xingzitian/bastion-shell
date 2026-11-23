@@ -1871,3 +1871,17 @@ body {
 }
 .cli-shell-error { padding: 24px; color: #ddd; font-size: 13px; overflow: auto; }
 .cli-shell-error pre { background: #2d2d2d; padding: 10px; border-radius: 4px; white-space: pre-wrap; }
+/* 薄壳顶栏里的可点链接按钮 / 警告 */
+.cli-shell-bar .link-btn {
+  background: transparent;
+  border: 0;
+  color: #4daafc;
+  cursor: pointer;
+  font-size: 12px;
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cli-shell-bar .link-btn:hover { text-decoration: underline; }
+.cli-shell-warn { color: #d7ba7d; cursor: help; }
