@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CliShellView } from './components/CliShellView'
 import { CliGroupDialog } from './components/CliGroupDialog'
+import { CliPasswordDialog } from './components/CliPasswordDialog'
 import type { AuthPromptPayload, ConnectionProfile, DeployTask } from './shared/types'
 import { ConnectDialog, ConnectDialogResult } from './components/ConnectDialog'
 import { AuthPromptDialog } from './components/AuthPromptDialog'
@@ -82,6 +83,8 @@ export default function App() {
   const [cliShellProfiles, setCliShellProfiles] = useState<string[] | null>(null)
   const [cliShellUrl, setCliShellUrl] = useState<string | null>(null)
   const [showCliGroup, setShowCliGroup] = useState(false)
+  // ⚡ 单条：密码认证的档案先问一次密码（GUI 下 CLI 没控制台）
+  const [cliPwProfile, setCliPwProfile] = useState<string | null>(null)
   const [aiAccess, setAiAccess] = useState<AiAccess | null>(null)
 
   /** 打开「AI 访问」：先拉一次数据再显示（解绑后也走它刷新） */
@@ -681,7 +684,13 @@ export default function App() {
               <button
                 className="icon-btn"
                 title="用 CLI 宿主打开（网页终端，beta）"
-                onClick={() => { setCliShellUrl(null); setCliShellProfiles([p.name]) }}
+                onClick={() => {
+                  setCliShellUrl(null)
+                  // 密码认证（或存过密码）的档案先弹密码框：GUI 起的 CLI 没有控制台，问不了密码
+                  const needsPw = (p.authMethod ?? 'password') === 'password' || p.hasStoredPassword
+                  if (needsPw) setCliPwProfile(p.name)
+                  else setCliShellProfiles([p.name])
+                }}
               >
                 ⚡
               </button>
@@ -1082,6 +1091,31 @@ export default function App() {
           onClose={() => {
             setCliShellProfiles(null)
             setCliShellUrl(null)
+          }}
+        />
+      ) : null}
+      {cliPwProfile ? (
+        <CliPasswordDialog
+          profile={cliPwProfile}
+          onClose={() => setCliPwProfile(null)}
+          onStart={(password) => {
+            const name = cliPwProfile
+            setCliPwProfile(null)
+            void fetch('http://127.0.0.1:18090/api/shell/cli/start', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ profiles: [{ name, password }] })
+            })
+              .then((r) => r.json() as Promise<{ url?: string; error?: string }>)
+              .then((j) => {
+                if (j.url) {
+                  setCliShellUrl(j.url)
+                  setCliShellProfiles([name])
+                } else {
+                  alert(`启动失败：${j.error ?? '未知原因'}`)
+                }
+              })
+              .catch((e: unknown) => alert(`启动失败：${e instanceof Error ? e.message : String(e)}`))
           }}
         />
       ) : null}
