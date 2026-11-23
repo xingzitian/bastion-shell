@@ -525,3 +525,39 @@ func truncateForLog(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+// startUiBackend 拉起「核心界面后端」：node <cli> ui --port 18090 --proxy http://127.0.0.1:<goPort>
+//
+// 这是"统一核心"的第一步：界面继续用 18090 那套 HTTP/WS 协议，但服务方换成 core；
+// 还没迁进 core 的接口（secret/upload/forwards/pick-files/shell）由 core 反向代理给 Go。
+// 隐藏窗口、跟着父进程退出（--parent-pid），用户看不到任何命令行。
+func startUiBackend(corePort, goPort int) error {
+	js, err := cliScriptPath()
+	if err != nil {
+		return err
+	}
+	args := []string{js, "ui", "--port", strconv.Itoa(corePort), "--proxy", "http://127.0.0.1:" + strconv.Itoa(goPort), "--parent-pid", strconv.Itoa(os.Getpid())}
+	cmd := exec.Command("node", args...)
+	hideWindow(cmd)
+	stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("起核心界面后端失败：%w", err)
+	}
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, e := stderr.Read(buf)
+			if n > 0 {
+				log.Printf("[core-ui] %s", strings.TrimRight(string(buf[:n]), "\r\n"))
+			}
+			if e != nil {
+				return
+			}
+		}
+	}()
+	theCliShell.mu.Lock()
+	theCliShell.proc = cmd // 复用同一个句柄：退出时 stopCliShell 会收掉
+	theCliShell.prof = "__ui__"
+	theCliShell.mu.Unlock()
+	log.Printf("核心界面后端已启动：http://127.0.0.1:%d（代理 → Go %d）", corePort, goPort)
+	return nil
+}
