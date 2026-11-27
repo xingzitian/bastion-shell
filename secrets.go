@@ -59,7 +59,12 @@ func (s *secretStore) set(key, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.vals[key] = base64.StdEncoding.EncodeToString(enc)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		return err
+	}
+	// 清单（只有元数据）：让扩展的面板也能看见"桌面存了哪些"
+	recordCredIndex(key, "password", "desktop")
+	return nil
 }
 
 func (s *secretStore) get(key string) (string, bool) {
@@ -87,7 +92,11 @@ func (s *secretStore) remove(key string) error {
 		return nil
 	}
 	delete(s.vals, key)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		return err
+	}
+	dropCredIndex(key, "password", "desktop")
+	return nil
 }
 
 // all 把所有条目解密出来（key → 明文）。解不开的条目直接跳过：
