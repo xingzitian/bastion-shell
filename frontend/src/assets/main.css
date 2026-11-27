@@ -1902,3 +1902,29 @@ body {
   border-radius: 4px;
   font-size: 13px;
 }
+/* ── 凭据弹窗（与扩展的凭据面板同一份数据） ───────────────────────── */
+.cred-modal { width: min(900px, 94vw); max-height: 84vh; overflow: auto; }
+.cred-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.cred-table th, .cred-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  vertical-align: top;
+  font-size: 12px;
+}
+.cred-table th { font-weight: 600; opacity: 0.75; }
+.cred-ops { white-space: nowrap; }
+.cred-ops .btn { margin-right: 6px; }
+
+.cred-edit { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.cred-edit input {
+  flex: 1 1 auto;
+  min-width: 180px;
+  padding: 4px 6px;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  background: var(--input-bg, rgba(0, 0, 0, 0.25));
+  color: inherit;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+}

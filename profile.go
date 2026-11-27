@@ -289,15 +289,100 @@ func delete2(entries []map[string]any, name, key string) {
 
 func (s *profileStore) remove(name string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := make([]map[string]any, 0, len(s.entries))
+	var removed *Profile
 	for _, e := range s.entries {
 		if n, _ := e["name"].(string); n != name {
 			out = append(out, e)
+		} else {
+			p := profileFromEntry(e)
+			removed = &p
 		}
 	}
 	s.entries = out
-	return s.saveLocked()
+	err := s.saveLocked()
+	// 改名还是删除？看剩下还有没有**同一台机器**（身份字段一致）的档案：
+	//   - 有 → 用户是改名：把 DPAPI 里那份密码搬到新名字下（否则密码就成孤儿了）
+	//   - 没有 → 真删了：把密码一起清掉（和扩展侧 core/profileSecretMigration 的规则一致）
+	// 与扩展同一条规则：host/port/username/私钥路径 完全一致才算同一台。
+	var movedTo string
+	ambiguous := false
+	if removed != nil {
+		movedTo, ambiguous = s.migrateSecretOnRemoveLocked(*removed)
+	}
+	s.mu.Unlock()
+	if removed != nil {
+		if ambiguous {
+			// 分不清谁接手（同一台机器还配了多条）：**不搬也不删** ——
+			// 留成可见的孤儿，界面上还能看到并手动处理（删了找不回来）
+			log.Printf("档案「%s」删了，但同身份档案不止一条，密码原样留着（会成为孤儿，可在凭据界面清）", removed.Name)
+		} else {
+			// 不管搬没搬，旧名字那份都要删（搬的时候已经写了一份到新名字下）
+			st := newSecretStore()
+			st.load()
+			if e := st.remove(removed.Name); e != nil {
+				log.Printf("清掉旧名字的密码失败（%s）：%v", removed.Name, e)
+			}
+			if movedTo != "" {
+				log.Printf("档案改名：密码已从「%s」搬到「%s」", removed.Name, movedTo)
+			}
+		}
+	}
+	return err
+}
+
+// migrateSecretOnRemoveLocked 在**已删除**某个档案之后，找同一身份的幸存档案并接手它的密码。
+// 返回 (接手的档案名, 是否分不清)。调用方需持有 s.mu。
+func (s *profileStore) migrateSecretOnRemoveLocked(removed Profile) (string, bool) {
+	var hits []Profile
+	for _, e := range s.entries {
+		p := profileFromEntry(e)
+		if p.Name == removed.Name {
+			continue
+		}
+		if sameTarget(removed, p) {
+			hits = append(hits, p)
+		}
+	}
+	// 分不清（同一台机器还配了多条）就不搬也不删：宁可留个可见的孤儿，也不能搬错
+	if len(hits) > 1 {
+		return "", true
+	}
+	if len(hits) == 0 {
+		return "", false
+	}
+	st := newSecretStore()
+	st.load()
+	pw, ok := st.get(removed.Name)
+	if !ok || pw == "" {
+		return "", false
+	}
+	if err := st.set(hits[0].Name, pw); err != nil {
+		log.Printf("改名时搬密码失败（%s → %s）：%v", removed.Name, hits[0].Name, err)
+		return "", false
+	}
+	return hits[0].Name, false
+}
+
+// sameTarget 两个档案是不是同一台机器/同一个登录身份（与扩展侧的身份字段一致）
+func sameTarget(a, b Profile) bool {
+	if strings.TrimSpace(strings.ToLower(a.Host)) != strings.TrimSpace(strings.ToLower(b.Host)) {
+		return false
+	}
+	pa, pb := a.Port, b.Port
+	if pa == 0 {
+		pa = 22
+	}
+	if pb == 0 {
+		pb = 22
+	}
+	if pa != pb {
+		return false
+	}
+	if strings.TrimSpace(strings.ToLower(a.Username)) != strings.TrimSpace(strings.ToLower(b.Username)) {
+		return false
+	}
+	return strings.TrimSpace(a.PrivateKeyPath) == strings.TrimSpace(b.PrivateKeyPath)
 }
 
 // saveLocked 写出共享文件：头注释 + 档案数组。

@@ -87,6 +87,13 @@
     return fetch(API_BASE + '/api/secret?key=' + encodeURIComponent(key), { method: 'DELETE' }).catch(function () {});
   }
 
+  // ---- 凭据清单（和扩展共用的 credentials.json 元数据）----
+  function getCredentials() {
+    return fetch(API_BASE + '/api/credentials')
+      .then(function (r) { return r.json(); })
+      .catch(function () { return { rows: [], orphans: [], indexFile: '', note: '读取失败（后端没起来？）' }; });
+  }
+
   // ---- 连接 ----
   async function connect(req) {
     var profile = req.profile || {};
@@ -559,6 +566,10 @@
     pickPrivateKey: pickPrivateKey,
     readClipboard: readClipboard,
     writeClipboard: writeClipboard,
+    getCredentials: getCredentials,
+    getPassword: getPassword,
+    setPassword: setPassword,
+    deletePassword: deletePassword,
     getAiAccess: getAiAccess,
     unbindAiBinding: unbindAiBinding,
     listProfiles: listProfiles,

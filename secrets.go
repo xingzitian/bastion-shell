@@ -99,6 +99,17 @@ func (s *secretStore) remove(key string) error {
 	return nil
 }
 
+// keys 当前存了哪些键（**只给键名**，不带密文/明文）。给 /api/credentials 用。
+func (s *secretStore) keys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.vals))
+	for k := range s.vals {
+		out = append(out, k)
+	}
+	return out
+}
+
 // all 把所有条目解密出来（key → 明文）。解不开的条目直接跳过：
 // DPAPI 密文换用户/换机器就解不开，那种情况应该"这条没有密码"，而不是让整体失败。
 func (s *secretStore) all() map[string]string {

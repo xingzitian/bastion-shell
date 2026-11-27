@@ -38,7 +38,9 @@ func bastionConfigDir() string {
 // 界面（wails:// 源）与 core（18090）都要跨域访问，所以统一加 CORS。
 func serveBackend(port int) error {
 	mux := http.NewServeMux()
-	registerProfileRoutes(mux, newProfileStore()) // 档案读写（core 侧也读同一份 jsonc）
+	profiles := newProfileStore()
+	registerProfileRoutes(mux, profiles)          // 档案读写（core 侧也读同一份 jsonc）
+	registerCredentialRoutes(mux, profiles)       // 凭据弹窗的数据（档案 × 凭据 × 孤儿）
 	registerForwardRoutes(mux, newForwardStore()) // 转发规则的持久化列表
 	registerQuickCommandRoutes(mux)               // 快捷命令
 	registerSecretRoutes(mux, newSecretStore())   // DPAPI 存密码

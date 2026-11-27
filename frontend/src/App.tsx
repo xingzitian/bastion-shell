@@ -14,6 +14,7 @@ import { BroadcastBar } from './components/BroadcastBar'
 import { SyncDialog } from './components/SyncDialog'
 import { PortsPanel } from './components/PortsPanel'
 import { AiAccessDialog } from './components/AiAccessDialog'
+import { CredentialDialog } from './components/CredentialDialog'
 import type { AiAccess } from './shared/types'
 import { DeployDialog } from './components/DeployDialog'
 import { bus } from './lib/bus'
@@ -79,6 +80,7 @@ export default function App() {
   const [showSync, setShowSync] = useState(false)
   const [showPorts, setShowPorts] = useState<{ connectionId: string; profileId: string } | null>(null)
   const [showAiAccess, setShowAiAccess] = useState(false)
+  const [showCredentials, setShowCredentials] = useState(false)
   // B2：CLI 薄壳（web 终端）当前打开的档案名；null = 未打开
   const [cliShellProfiles, setCliShellProfiles] = useState<string[] | null>(null)
   const [cliShellUrl, setCliShellUrl] = useState<string | null>(null)
@@ -656,6 +658,9 @@ export default function App() {
           </button>          <button className="sidebar-tool-btn" title="AI 访问：权限与绑定（与扩展共用绑定文件）" onClick={() => void openAiAccess()}>
             🤖 AI
           </button>
+          <button className="sidebar-tool-btn" title="凭据：本机存了哪些密码 / 私钥口令（与扩展共用清单）" onClick={() => setShowCredentials(true)}>
+            🔑 凭据
+          </button>
 
         {quickCommands.length > 0 && (
           <div className="qc-column">
@@ -942,6 +947,8 @@ export default function App() {
       )}
 
       {authPrompt && <AuthPromptDialog prompt={authPrompt} onSubmit={submitAuth} onCancel={cancelAuth} />}
+
+      {showCredentials && <CredentialDialog onClose={() => setShowCredentials(false)} />}
 
       {showAiAccess && aiAccess && (
         <AiAccessDialog

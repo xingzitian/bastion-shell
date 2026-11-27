@@ -301,6 +301,36 @@ export interface AiAccess {
   note: string
 }
 /** preload 暴露给渲染进程的 API 形状 */
+
+/** 凭据弹窗的数据（Go: /api/credentials） */
+export interface CredentialSlotView {
+  has: boolean
+  owners: string[]
+  updatedAt: string
+}
+
+export interface CredentialRowView {
+  name: string
+  target: string
+  authMethod: string
+  password: CredentialSlotView
+  passphrase: CredentialSlotView
+}
+
+export interface CredentialOrphanView {
+  key: string
+  owners: string[]
+  kinds: string[]
+  updatedAt: string
+}
+
+export interface CredentialsView {
+  rows: CredentialRowView[]
+  orphans: CredentialOrphanView[]
+  indexFile: string
+  note: string
+}
+
 export interface BastionApi {
   connect(req: ConnectRequest): Promise<{ connectionId: string }>
   answerAuth(nonce: string, value: string | null): Promise<boolean>
@@ -346,6 +376,12 @@ export interface BastionApi {
   /** 写入系统剪贴板（供远端 vim OSC 52 复制桥接使用） */
   writeClipboard(text: string): void
   /** AI 访问页：令牌 / 权限 / 绑定 */
+  /** 凭据弹窗：档案 × 凭据 × 孤儿（只含元数据，不含密码） */
+  getCredentials(): Promise<CredentialsView>
+  /** 桌面 DPAPI 里的密码（查看/替换用；key = 档案名） */
+  getPassword(key: string): Promise<string>
+  setPassword(key: string, value: string): Promise<void>
+  deletePassword(key: string): Promise<void>
   getAiAccess(): Promise<AiAccess>
   unbindAiBinding(payload: { clientId: string; alias?: string; sessionId?: string }): Promise<{ ok: boolean }>
   listProfiles(): Promise<ConnectionProfile[]>
